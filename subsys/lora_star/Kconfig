@@ -1,0 +1,98 @@
+menu "LoRa Star Protocol"
+
+config LORA_STAR
+	bool "LoRa Star protocol library"
+	depends on MBEDTLS
+	depends on MBEDTLS_BUILTIN
+	depends on PSA_CRYPTO
+	depends on SETTINGS
+	depends on ENTROPY_GENERATOR
+	select PSA_WANT_ALG_ECDH
+	select PSA_WANT_ECC_MONTGOMERY_255
+	select PSA_WANT_KEY_TYPE_ECC_KEY_PAIR_GENERATE
+	select PSA_WANT_KEY_TYPE_ECC_KEY_PAIR_IMPORT
+	select PSA_WANT_KEY_TYPE_ECC_KEY_PAIR_EXPORT
+	select PSA_WANT_ALG_HKDF
+	select PSA_WANT_ALG_SHA_256
+	select PSA_WANT_KEY_TYPE_DERIVE
+	select PSA_WANT_ALG_CTR
+	select PSA_WANT_KEY_TYPE_AES
+	select PSA_WANT_ALG_CMAC
+	help
+	  Enable the LoRa Star custom star-topology protocol library.
+	  The Settings subsystem handles persistent state; choose a backend
+	  (CONFIG_SETTINGS_ZMS, CONFIG_SETTINGS_NVS, …) in your application.
+
+if LORA_STAR
+
+config LORA_STAR_COORDINATOR
+	bool "Build coordinator role"
+	depends on LORA
+	help
+	  Include the coordinator state machine.  Exactly one device in the
+	  network runs as coordinator.
+
+config LORA_STAR_NODE
+	bool "Build node role"
+	depends on LORA
+	depends on HWINFO
+	help
+	  Include the node state machine.
+
+config LORA_STAR_MAX_NODES
+	int "Maximum number of paired nodes (coordinator)"
+	default 16
+	depends on LORA_STAR_COORDINATOR
+	help
+	  Size of the in-RAM node table.  Each entry is ~30 bytes.
+
+config LORA_STAR_PAIRING_WINDOW_S
+	int "Pairing window duration (seconds)"
+	default 10
+
+config LORA_STAR_PAIRING_RSSI_THRESHOLD_DBM
+	int "Minimum RSSI for JOIN_REQ acceptance (dBm)"
+	default -60
+
+config LORA_STAR_RX_WINDOW_MS
+	int "RX window duration after a DATA frame (ms)"
+	default 1000
+
+config LORA_STAR_TX_MAX_RETRIES
+	int "Maximum uplink retries before reporting failure"
+	default 3
+
+config LORA_STAR_TX_RETRY_BACKOFF_MS
+	int "Base backoff between retries (ms); uniform jitter [0,base) added"
+	default 500
+
+config LORA_STAR_FCNT_REBOOT_INCREMENT
+	int "Frame counter guard increment on reboot"
+	default 32
+	help
+	  After a reboot, FCNT is restored from Settings then incremented by
+	  this value to account for frames sent before the last save.
+
+config LORA_STAR_FREQUENCY
+	int "LoRa carrier frequency (Hz)"
+	default 868100000
+
+config LORA_STAR_TX_POWER_DBM
+	int "LoRa TX power (dBm)"
+	default 14
+
+config LORA_STAR_THREAD_STACK_SIZE
+	int "Protocol thread stack size (bytes)"
+	default 2048
+
+config LORA_STAR_THREAD_PRIORITY
+	int "Protocol thread priority"
+	default 5
+
+module = LORA_STAR
+module-str = lora_star
+source "subsys/logging/Kconfig.template.log_config"
+
+endif # LORA_STAR
+
+endmenu

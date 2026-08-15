@@ -1,0 +1,9 @@
+manifest:
+  projects:
+    - name: zephyr
+      url: https://github.com/zephyrproject-rtos/zephyr
+      revision: main
+      import: true
+
+  self:
+    path: lora-star

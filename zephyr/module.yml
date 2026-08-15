@@ -1,0 +1,4 @@
+name: lora-star
+build:
+  cmake: .
+  kconfig: Kconfig
