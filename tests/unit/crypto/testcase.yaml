@@ -1,0 +1,11 @@
+common:
+  tags:
+    - lora_star
+  filter: CONFIG_CSPRNG_ENABLED
+  platform_allow:
+    - native_sim
+    - native_sim/native/64
+  integration_platforms:
+    - native_sim
+tests:
+  lora_star.unit.crypto: {}

@@ -36,6 +36,12 @@ struct downlink_entry {
 	bool    pending;
 };
 
+struct coord_rx_frame {
+	uint8_t data[LS_MAX_FRAME_SIZE];
+	uint8_t len;
+	int16_t rssi;
+};
+
 struct ls_coord_ctx {
 	const struct device    *lora_dev;
 	enum coord_state        state;
@@ -43,7 +49,6 @@ struct ls_coord_ctx {
 	ls_coord_join_cb        join_cb;
 	uint16_t                next_addr;
 	uint32_t                fcnt;
-	int64_t                 pairing_deadline_ms;
 	uint8_t                 priv_key[LS_PUBKEY_SIZE];
 	uint8_t                 pub_key[LS_PUBKEY_SIZE];
 	bool                    keypair_ready;
@@ -51,6 +56,8 @@ struct ls_coord_ctx {
 	struct downlink_entry   downlinks[CONFIG_LORA_STAR_MAX_NODES];
 	struct k_mutex          dl_mutex;
 	struct k_work           pairing_work;
+	struct k_work_delayable pairing_close_work;
+	struct k_msgq           rx_msgq;
 	struct lora_modem_config radio_cfg;
 };
 

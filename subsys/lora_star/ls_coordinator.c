@@ -13,7 +13,10 @@
 
 LOG_MODULE_REGISTER(ls_coord, CONFIG_LORA_STAR_LOG_LEVEL);
 
+#define COORD_RX_QUEUE_DEPTH 8
+
 static struct ls_coord_ctx ls_coord_instance;
+static char coord_rx_msgq_buf[COORD_RX_QUEUE_DEPTH * sizeof(struct coord_rx_frame)];
 
 /* --------------------------------------------------------------------------
  * Helpers
@@ -23,6 +26,51 @@ static int coord_set_tx(struct ls_coord_ctx *ctx, bool tx)
 {
 	ctx->radio_cfg.tx = tx;
 	return lora_config(ctx->lora_dev, &ctx->radio_cfg);
+}
+
+static void coord_rx_cb(const struct device *dev, uint8_t *data, uint16_t size,
+			int16_t rssi, int8_t snr, void *user_data)
+{
+	struct ls_coord_ctx *ctx = user_data;
+	struct coord_rx_frame frame;
+
+	ARG_UNUSED(dev);
+	ARG_UNUSED(snr);
+
+	if (!data || size == 0 || size > sizeof(frame.data)) {
+		return;
+	}
+
+	frame.len  = (uint8_t)size;
+	frame.rssi = rssi;
+	memcpy(frame.data, data, size);
+
+	if (k_msgq_put(&ctx->rx_msgq, &frame, K_NO_WAIT) < 0) {
+		LOG_WRN("RX queue full — frame dropped");
+	}
+}
+
+static void coord_rx_start(struct ls_coord_ctx *ctx)
+{
+	coord_set_tx(ctx, false);
+	lora_recv_async(ctx->lora_dev, coord_rx_cb, ctx);
+}
+
+static void coord_rx_stop(struct ls_coord_ctx *ctx)
+{
+	lora_recv_async(ctx->lora_dev, NULL, NULL);
+}
+
+static int coord_send_frame(struct ls_coord_ctx *ctx, uint8_t *buf, uint8_t len)
+{
+	int ret;
+
+	coord_rx_stop(ctx);
+	coord_set_tx(ctx, true);
+	ret = lora_send(ctx->lora_dev, buf, len);
+	coord_rx_start(ctx);
+
+	return ret;
 }
 
 static int coord_find_node(struct ls_coord_ctx *ctx, uint16_t addr)
@@ -207,9 +255,7 @@ static void handle_join_req(struct ls_coord_ctx *ctx,
 		return;
 	}
 
-	coord_set_tx(ctx, true);
-	lora_send(ctx->lora_dev, tx_buf, hdr_payload_len + LS_MIC_SIZE);
-	coord_set_tx(ctx, false);
+	coord_send_frame(ctx, tx_buf, hdr_payload_len + LS_MIC_SIZE);
 
 	memset(ctx->priv_key, 0, sizeof(ctx->priv_key));
 	memset(ctx->pub_key, 0, sizeof(ctx->pub_key));
@@ -231,6 +277,7 @@ static void handle_join_req(struct ls_coord_ctx *ctx,
 	}
 	ls_storage_coord_save_fcnt(ctx->fcnt);
 
+	k_work_cancel_delayable(&ctx->pairing_close_work);
 	ctx->state = COORD_IDLE;
 
 	LOG_INF("Node 0x%04x %s", short_addr, is_repair ? "re-paired" : "joined");
@@ -352,24 +399,38 @@ static void handle_data(struct ls_coord_ctx *ctx,
 
 	ls_storage_coord_save_fcnt(ctx->fcnt);
 
-	coord_set_tx(ctx, true);
-	lora_send(ctx->lora_dev, tx_buf, hp_len + LS_MIC_SIZE);
-	coord_set_tx(ctx, false);
+	coord_send_frame(ctx, tx_buf, hp_len + LS_MIC_SIZE);
 }
 
 /* --------------------------------------------------------------------------
  * Pairing work handler
  * -------------------------------------------------------------------------- */
 
+static void pairing_close_work_handler(struct k_work *work)
+{
+	struct ls_coord_ctx *ctx =
+		CONTAINER_OF(work, struct ls_coord_ctx, pairing_close_work.work);
+
+	ctx->state = COORD_IDLE;
+	LOG_INF("Pairing window closed");
+}
+
 static void pairing_work_handler(struct k_work *work)
 {
 	struct ls_coord_ctx *ctx =
 		CONTAINER_OF(work, struct ls_coord_ctx, pairing_work);
 
-	ctx->keypair_ready      = false;
-	ctx->state              = COORD_PAIRING;
-	ctx->pairing_deadline_ms = k_uptime_get() +
-				   (int64_t)CONFIG_LORA_STAR_PAIRING_WINDOW_S * 1000;
+	ctx->keypair_ready = false;
+
+	if (ls_crypto_ecdh_gen_keypair(ctx->pub_key, ctx->priv_key) < 0) {
+		LOG_ERR("ECDH keygen failed; pairing not started");
+		return;
+	}
+	ctx->keypair_ready = true;
+
+	ctx->state = COORD_PAIRING;
+	k_work_schedule(&ctx->pairing_close_work,
+			K_SECONDS(CONFIG_LORA_STAR_PAIRING_WINDOW_S));
 	LOG_INF("Pairing window open (%d s)", CONFIG_LORA_STAR_PAIRING_WINDOW_S);
 }
 
@@ -382,41 +443,22 @@ static void coord_thread_fn(void *p1, void *p2, void *p3)
 	ARG_UNUSED(p2);
 	ARG_UNUSED(p3);
 	struct ls_coord_ctx *ctx = p1;
+	struct coord_rx_frame frame;
 
-	uint8_t rx_buf[LS_MAX_FRAME_SIZE];
-	int16_t rssi;
-	int8_t  snr;
-
-	coord_set_tx(ctx, false);
+	coord_rx_start(ctx);
 
 	while (1) {
-		if (ctx->state == COORD_PAIRING && !ctx->keypair_ready) {
-			if (ls_crypto_ecdh_gen_keypair(ctx->pub_key,
-						       ctx->priv_key) == 0) {
-				ctx->keypair_ready = true;
-			}
-		}
+		k_msgq_get(&ctx->rx_msgq, &frame, K_FOREVER);
 
-		int n = lora_recv(ctx->lora_dev, rx_buf, sizeof(rx_buf),
-				  K_MSEC(500), &rssi, &snr);
-
-		if (n > 0) {
-			switch (rx_buf[0]) {
-			case LS_TYPE_JOIN_REQ:
-				handle_join_req(ctx, rx_buf, n, rssi);
-				break;
-			case LS_TYPE_DATA:
-				handle_data(ctx, rx_buf, n);
-				break;
-			default:
-				break;
-			}
-		}
-
-		if (ctx->state == COORD_PAIRING &&
-		    k_uptime_get() >= ctx->pairing_deadline_ms) {
-			ctx->state = COORD_IDLE;
-			LOG_INF("Pairing window closed");
+		switch (frame.data[0]) {
+		case LS_TYPE_JOIN_REQ:
+			handle_join_req(ctx, frame.data, frame.len, frame.rssi);
+			break;
+		case LS_TYPE_DATA:
+			handle_data(ctx, frame.data, frame.len);
+			break;
+		default:
+			break;
 		}
 	}
 }
@@ -448,6 +490,10 @@ struct ls_coord_ctx *ls_init_coordinator(const struct device *lora_dev)
 
 	k_mutex_init(&ls_coord_instance.dl_mutex);
 	k_work_init(&ls_coord_instance.pairing_work, pairing_work_handler);
+	k_work_init_delayable(&ls_coord_instance.pairing_close_work,
+			      pairing_close_work_handler);
+	k_msgq_init(&ls_coord_instance.rx_msgq, coord_rx_msgq_buf,
+		    sizeof(struct coord_rx_frame), COORD_RX_QUEUE_DEPTH);
 
 	int ret = ls_storage_coord_load(&ls_coord_instance.next_addr,
 					&ls_coord_instance.fcnt,
