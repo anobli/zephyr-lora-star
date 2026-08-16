@@ -94,6 +94,30 @@ void ls_coord_start_pairing(struct ls_coord_ctx *ctx);
 int ls_coord_send(struct ls_coord_ctx *ctx, uint16_t short_addr,
 		  const uint8_t *data, uint8_t len);
 
+/**
+ * @brief Send a downlink to a paired node via an immediate coordinator DATA frame.
+ *
+ * Unlike ls_coord_send(), which buffers the payload for delivery on the next
+ * node uplink ACK, this function marks the downlink for direct transmission.
+ * The coordinator thread sends it within its next poll cycle (≤ 500 ms).
+ *
+ * Intended for nodes built with CONFIG_LORA_STAR_NODE_ALWAYS_RX=y that are
+ * continuously listening. On duty-cycled nodes the frame may be missed if the
+ * node is not in RX at the time of transmission.
+ *
+ * Only one pending direct downlink per node is kept; a second call overwrites
+ * the first. Direct downlinks are never ACK-piggybacked; use ls_coord_send()
+ * for that behaviour.
+ *
+ * @param ctx         Coordinator context.
+ * @param short_addr  Destination node short address (0x0001–0xFFFE).
+ * @param data        Payload buffer (max 114 bytes).
+ * @param len         Payload length in bytes.
+ * @return 0 on success, -ENOENT if address unknown, -EINVAL if len > 114.
+ */
+int ls_coord_send_direct(struct ls_coord_ctx *ctx, uint16_t short_addr,
+			  const uint8_t *data, uint8_t len);
+
 /** @brief Register the uplink receive callback. */
 void ls_coord_set_recv_cb(struct ls_coord_ctx *ctx, ls_coord_recv_cb cb);
 

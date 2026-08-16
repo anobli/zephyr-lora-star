@@ -357,7 +357,7 @@ static void handle_data(struct ls_coord_ctx *ctx,
 	bool    dl_pending = false;
 
 	k_mutex_lock(&ctx->dl_mutex, K_FOREVER);
-	if (ctx->downlinks[slot].pending) {
+	if (ctx->downlinks[slot].pending && !ctx->downlinks[slot].direct) {
 		memcpy(dl_data, ctx->downlinks[slot].data,
 		       ctx->downlinks[slot].len);
 		dl_len     = ctx->downlinks[slot].len;
@@ -400,6 +400,76 @@ static void handle_data(struct ls_coord_ctx *ctx,
 	ls_storage_coord_save_fcnt(ctx->fcnt);
 
 	coord_send_frame(ctx, tx_buf, hp_len + LS_MIC_SIZE);
+}
+
+/* --------------------------------------------------------------------------
+ * Direct downlink (coordinator DATA frame)
+ * -------------------------------------------------------------------------- */
+
+static void handle_direct_sends(struct ls_coord_ctx *ctx)
+{
+	for (int i = 0; i < CONFIG_LORA_STAR_MAX_NODES; i++) {
+		if (!ctx->nodes[i].active) {
+			continue;
+		}
+
+		uint8_t data[LS_MAX_PAYLOAD_SIZE];
+		uint8_t len;
+
+		k_mutex_lock(&ctx->dl_mutex, K_FOREVER);
+		bool direct = ctx->downlinks[i].direct;
+
+		if (direct) {
+			len = ctx->downlinks[i].len;
+			memcpy(data, ctx->downlinks[i].data, len);
+			ctx->downlinks[i].direct  = false;
+			ctx->downlinks[i].pending = false;
+		}
+		k_mutex_unlock(&ctx->dl_mutex);
+
+		if (!direct) {
+			continue;
+		}
+
+		struct coord_node *n = &ctx->nodes[i];
+		uint32_t fcnt = ctx->fcnt++;
+
+		uint8_t enc[LS_MAX_PAYLOAD_SIZE];
+
+		ls_crypto_payload_crypt(n->rec.session_key, fcnt, LS_COORD_ADDR,
+					data, enc, len);
+
+		struct ls_frame_hdr hdr = {
+			.type  = LS_TYPE_DATA,
+			.src   = LS_COORD_ADDR,
+			.dst   = n->short_addr,
+			.fcnt  = fcnt,
+			.flags = 0,
+		};
+
+		uint8_t tx_buf[LS_MAX_FRAME_SIZE];
+		int hp_len = ls_frame_encode(tx_buf, sizeof(tx_buf), &hdr, enc, len);
+
+		if (hp_len < 0) {
+			LOG_ERR("Direct send encode failed for 0x%04x", n->short_addr);
+			continue;
+		}
+
+		if (ls_append_mic(tx_buf, hp_len, n->rec.session_key) < 0) {
+			continue;
+		}
+
+		ls_storage_coord_save_fcnt(ctx->fcnt);
+
+		int tx_ret = coord_send_frame(ctx, tx_buf, hp_len + LS_MIC_SIZE);
+
+		if (tx_ret < 0) {
+			LOG_ERR("Direct downlink TX failed for 0x%04x: %d",
+				n->short_addr, tx_ret);
+		} else {
+			LOG_INF("Direct downlink → 0x%04x (%u B)", n->short_addr, len);
+		}
+	}
 }
 
 /* --------------------------------------------------------------------------
@@ -448,18 +518,22 @@ static void coord_thread_fn(void *p1, void *p2, void *p3)
 	coord_rx_start(ctx);
 
 	while (1) {
-		k_msgq_get(&ctx->rx_msgq, &frame, K_FOREVER);
+		int ret = k_msgq_get(&ctx->rx_msgq, &frame, K_MSEC(500));
 
-		switch (frame.data[0]) {
-		case LS_TYPE_JOIN_REQ:
-			handle_join_req(ctx, frame.data, frame.len, frame.rssi);
-			break;
-		case LS_TYPE_DATA:
-			handle_data(ctx, frame.data, frame.len);
-			break;
-		default:
-			break;
+		if (ret == 0) {
+			switch (frame.data[0]) {
+			case LS_TYPE_JOIN_REQ:
+				handle_join_req(ctx, frame.data, frame.len, frame.rssi);
+				break;
+			case LS_TYPE_DATA:
+				handle_data(ctx, frame.data, frame.len);
+				break;
+			default:
+				break;
+			}
 		}
+
+		handle_direct_sends(ctx);
 	}
 }
 
@@ -532,6 +606,29 @@ int ls_coord_send(struct ls_coord_ctx *ctx, uint16_t short_addr,
 	memcpy(ctx->downlinks[slot].data, data, len);
 	ctx->downlinks[slot].len     = len;
 	ctx->downlinks[slot].pending = true;
+	k_mutex_unlock(&ctx->dl_mutex);
+
+	return 0;
+}
+
+int ls_coord_send_direct(struct ls_coord_ctx *ctx, uint16_t short_addr,
+			  const uint8_t *data, uint8_t len)
+{
+	if (len > LS_MAX_PAYLOAD_SIZE) {
+		return -EINVAL;
+	}
+
+	int slot = coord_find_node(ctx, short_addr);
+
+	if (slot < 0) {
+		return -ENOENT;
+	}
+
+	k_mutex_lock(&ctx->dl_mutex, K_FOREVER);
+	memcpy(ctx->downlinks[slot].data, data, len);
+	ctx->downlinks[slot].len     = len;
+	ctx->downlinks[slot].pending = true;
+	ctx->downlinks[slot].direct  = true;
 	k_mutex_unlock(&ctx->dl_mutex);
 
 	return 0;

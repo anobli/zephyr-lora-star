@@ -16,6 +16,11 @@ LOG_MODULE_REGISTER(ls_node, CONFIG_LORA_STAR_LOG_LEVEL);
 
 static struct ls_node_ctx ls_node_instance;
 
+#if IS_ENABLED(CONFIG_LORA_STAR_NODE_ALWAYS_RX)
+#define NODE_RX_QUEUE_DEPTH 4
+static char node_rx_msgq_buf[NODE_RX_QUEUE_DEPTH * sizeof(struct node_rx_frame)];
+#endif
+
 /* --------------------------------------------------------------------------
  * Helpers
  * -------------------------------------------------------------------------- */
@@ -24,6 +29,58 @@ static int node_set_tx(struct ls_node_ctx *ctx, bool tx)
 {
 	ctx->radio_cfg.tx = tx;
 	return lora_config(ctx->lora_dev, &ctx->radio_cfg);
+}
+
+#if IS_ENABLED(CONFIG_LORA_STAR_NODE_ALWAYS_RX)
+static void node_rx_cb(const struct device *dev, uint8_t *data, uint16_t size,
+			int16_t rssi, int8_t snr, void *user_data)
+{
+	struct ls_node_ctx *ctx = user_data;
+	struct node_rx_frame frame;
+
+	ARG_UNUSED(dev);
+	ARG_UNUSED(rssi);
+	ARG_UNUSED(snr);
+
+	if (!data || size == 0 || size > sizeof(frame.data)) {
+		return;
+	}
+
+	frame.len = (uint8_t)size;
+	memcpy(frame.data, data, size);
+
+	if (k_msgq_put(&ctx->rx_msgq, &frame, K_NO_WAIT) < 0) {
+		LOG_WRN("RX queue full — frame dropped");
+	}
+}
+
+static void node_rx_start(struct ls_node_ctx *ctx)
+{
+	node_set_tx(ctx, false);
+	lora_recv_async(ctx->lora_dev, node_rx_cb, ctx);
+}
+
+static void node_rx_stop(struct ls_node_ctx *ctx)
+{
+	lora_recv_async(ctx->lora_dev, NULL, NULL);
+}
+#endif /* CONFIG_LORA_STAR_NODE_ALWAYS_RX */
+
+static int node_send_frame(struct ls_node_ctx *ctx, uint8_t *buf, uint8_t len)
+{
+	int ret;
+
+#if IS_ENABLED(CONFIG_LORA_STAR_NODE_ALWAYS_RX)
+	node_rx_stop(ctx);
+	node_set_tx(ctx, true);
+	ret = lora_send(ctx->lora_dev, buf, len);
+	node_rx_start(ctx);
+#else
+	node_set_tx(ctx, true);
+	ret = lora_send(ctx->lora_dev, buf, len);
+	node_set_tx(ctx, false);
+#endif
+	return ret;
 }
 
 
@@ -68,11 +125,7 @@ static int do_join_req(struct ls_node_ctx *ctx)
 		return -EIO;
 	}
 
-	node_set_tx(ctx, true);
-	int ret = lora_send(ctx->lora_dev, buf, hp_len + LS_MIC_SIZE);
-
-	node_set_tx(ctx, false);
-	return ret;
+	return node_send_frame(ctx, buf, hp_len + LS_MIC_SIZE);
 }
 
 static void handle_join_accept(struct ls_node_ctx *ctx,
@@ -175,11 +228,7 @@ static int do_send(struct ls_node_ctx *ctx)
 
 	ls_storage_node_save_fcnt(ctx->own_fcnt);
 
-	node_set_tx(ctx, true);
-	int ret = lora_send(ctx->lora_dev, buf, hp_len + LS_MIC_SIZE);
-
-	node_set_tx(ctx, false);
-	return ret;
+	return node_send_frame(ctx, buf, hp_len + LS_MIC_SIZE);
 }
 
 static void handle_ack(struct ls_node_ctx *ctx,
@@ -241,6 +290,63 @@ static void handle_ack(struct ls_node_ctx *ctx,
 }
 
 /* --------------------------------------------------------------------------
+ * Coordinator-initiated DATA frame (always-RX mode)
+ * -------------------------------------------------------------------------- */
+
+#if IS_ENABLED(CONFIG_LORA_STAR_NODE_ALWAYS_RX)
+static void handle_coord_data(struct ls_node_ctx *ctx,
+			       const uint8_t *buf, uint8_t len)
+{
+	struct ls_frame_hdr hdr;
+	const uint8_t *payload;
+	const uint8_t *rx_mic;
+	uint8_t        payload_len;
+
+	if (ls_frame_decode(buf, len, &hdr, &payload, &payload_len, &rx_mic) < 0) {
+		return;
+	}
+
+	if (hdr.type != LS_TYPE_DATA  ||
+	    hdr.src  != LS_COORD_ADDR ||
+	    hdr.dst  != ctx->short_addr) {
+		return;
+	}
+
+	if (hdr.fcnt <= ctx->fcnt_last) {
+		LOG_WRN("Coord DATA replay (fcnt %u <= last %u)",
+			hdr.fcnt, ctx->fcnt_last);
+		return;
+	}
+
+	uint8_t exp_mic[LS_MIC_SIZE];
+
+	ls_crypto_compute_mic(ctx->session_key,
+			      buf, LS_HEADER_SIZE,
+			      payload, payload_len,
+			      exp_mic);
+
+	if (mbedtls_ct_memcmp(rx_mic, exp_mic, LS_MIC_SIZE) != 0) {
+		LOG_WRN("Coord DATA MIC mismatch");
+		return;
+	}
+
+	ctx->fcnt_last = hdr.fcnt;
+	ls_storage_node_save_fcnt_last(ctx->fcnt_last);
+
+	if (payload_len == 0 || !ctx->recv_cb) {
+		return;
+	}
+
+	uint8_t plain[LS_MAX_PAYLOAD_SIZE];
+
+	ls_crypto_payload_crypt(ctx->session_key, hdr.fcnt, LS_COORD_ADDR,
+				payload, plain, payload_len);
+
+	ctx->recv_cb(ctx, plain, payload_len);
+}
+#endif /* CONFIG_LORA_STAR_NODE_ALWAYS_RX */
+
+/* --------------------------------------------------------------------------
  * Pairing work handler
  * -------------------------------------------------------------------------- */
 
@@ -262,12 +368,18 @@ static void node_thread_fn(void *p1, void *p2, void *p3)
 	ARG_UNUSED(p3);
 	struct ls_node_ctx *ctx = p1;
 
+#if IS_ENABLED(CONFIG_LORA_STAR_NODE_ALWAYS_RX)
+	struct node_rx_frame frame;
+
+	node_rx_start(ctx);
+#else
 	uint8_t rx_buf[LS_MAX_FRAME_SIZE];
 	int16_t rssi;
 	int8_t  snr;
 	int     n;
 
 	node_set_tx(ctx, false);
+#endif
 
 	while (1) {
 		switch (ctx->state) {
@@ -281,33 +393,56 @@ static void node_thread_fn(void *p1, void *p2, void *p3)
 			break;
 
 		case NODE_JOINING:
+#if IS_ENABLED(CONFIG_LORA_STAR_NODE_ALWAYS_RX)
+			if (k_msgq_get(&ctx->rx_msgq, &frame,
+				       K_MSEC(CONFIG_LORA_STAR_RX_WINDOW_MS)) == 0) {
+				handle_join_accept(ctx, frame.data, frame.len);
+				break;
+			}
+#else
 			n = lora_recv(ctx->lora_dev, rx_buf, sizeof(rx_buf),
 				      K_MSEC(CONFIG_LORA_STAR_RX_WINDOW_MS),
 				      &rssi, &snr);
 			if (n > 0) {
 				handle_join_accept(ctx, rx_buf, n);
-			} else if (n == -EAGAIN) {
-				if (++ctx->retry_count >=
-				    CONFIG_LORA_STAR_TX_MAX_RETRIES) {
-					LOG_WRN("Join timed out");
+				break;
+			}
+#endif
+			if (++ctx->retry_count >=
+			    CONFIG_LORA_STAR_TX_MAX_RETRIES) {
+				LOG_WRN("Join timed out");
+				ctx->state       = NODE_UNJOINED;
+				ctx->retry_count = 0;
+			} else {
+				uint32_t jitter =
+					sys_rand32_get() %
+					CONFIG_LORA_STAR_TX_RETRY_BACKOFF_MS;
+				k_msleep(CONFIG_LORA_STAR_TX_RETRY_BACKOFF_MS +
+					 jitter);
+				if (do_join_req(ctx) < 0) {
+					LOG_ERR("JOIN_REQ retransmit failed, aborting join");
 					ctx->state       = NODE_UNJOINED;
 					ctx->retry_count = 0;
-				} else {
-					uint32_t jitter =
-						sys_rand32_get() %
-						CONFIG_LORA_STAR_TX_RETRY_BACKOFF_MS;
-					k_msleep(CONFIG_LORA_STAR_TX_RETRY_BACKOFF_MS +
-						 jitter);
-					if (do_join_req(ctx) < 0) {
-						LOG_ERR("JOIN_REQ retransmit failed, aborting join");
-						ctx->state       = NODE_UNJOINED;
-						ctx->retry_count = 0;
-					}
 				}
 			}
 			break;
 
 		case NODE_JOINED:
+#if IS_ENABLED(CONFIG_LORA_STAR_NODE_ALWAYS_RX)
+			if (k_msgq_get(&ctx->rx_msgq, &frame, K_MSEC(100)) == 0 &&
+			    frame.data[0] == LS_TYPE_DATA) {
+				handle_coord_data(ctx, frame.data, frame.len);
+			}
+			if (k_sem_take(&ctx->send_sem, K_NO_WAIT) == 0) {
+				ctx->retry_count = 0;
+				if (do_send(ctx) == 0) {
+					ctx->state = NODE_WAITING_ACK;
+				} else {
+					ctx->send_result = -EIO;
+					k_sem_give(&ctx->result_sem);
+				}
+			}
+#else
 			k_sem_take(&ctx->send_sem, K_FOREVER);
 			ctx->retry_count = 0;
 			if (do_send(ctx) == 0) {
@@ -316,30 +451,46 @@ static void node_thread_fn(void *p1, void *p2, void *p3)
 				ctx->send_result = -EIO;
 				k_sem_give(&ctx->result_sem);
 			}
+#endif
 			break;
 
 		case NODE_WAITING_ACK:
+#if IS_ENABLED(CONFIG_LORA_STAR_NODE_ALWAYS_RX)
+			if (k_msgq_get(&ctx->rx_msgq, &frame,
+				       K_MSEC(CONFIG_LORA_STAR_RX_WINDOW_MS)) == 0) {
+				if (frame.data[0] == LS_TYPE_DATA) {
+					handle_coord_data(ctx, frame.data, frame.len);
+				} else {
+					handle_ack(ctx, frame.data, frame.len);
+				}
+				break;
+			}
+#else
 			n = lora_recv(ctx->lora_dev, rx_buf, sizeof(rx_buf),
 				      K_MSEC(CONFIG_LORA_STAR_RX_WINDOW_MS),
 				      &rssi, &snr);
 			if (n > 0) {
 				handle_ack(ctx, rx_buf, n);
-			} else if (n == -EAGAIN) {
-				if (++ctx->retry_count >=
-				    CONFIG_LORA_STAR_TX_MAX_RETRIES) {
-					LOG_WRN("ACK timed out after %d retries",
-						CONFIG_LORA_STAR_TX_MAX_RETRIES);
-					ctx->send_result = -ETIMEDOUT;
-					ctx->state       = NODE_JOINED;
-					k_sem_give(&ctx->result_sem);
-				} else {
-					uint32_t jitter =
-						sys_rand32_get() %
-						CONFIG_LORA_STAR_TX_RETRY_BACKOFF_MS;
-					k_msleep(CONFIG_LORA_STAR_TX_RETRY_BACKOFF_MS +
-						 jitter);
-					do_send(ctx);
-				}
+				break;
+			}
+			if (n != -EAGAIN) {
+				break;
+			}
+#endif
+			if (++ctx->retry_count >=
+			    CONFIG_LORA_STAR_TX_MAX_RETRIES) {
+				LOG_WRN("ACK timed out after %d retries",
+					CONFIG_LORA_STAR_TX_MAX_RETRIES);
+				ctx->send_result = -ETIMEDOUT;
+				ctx->state       = NODE_JOINED;
+				k_sem_give(&ctx->result_sem);
+			} else {
+				uint32_t jitter =
+					sys_rand32_get() %
+					CONFIG_LORA_STAR_TX_RETRY_BACKOFF_MS;
+				k_msleep(CONFIG_LORA_STAR_TX_RETRY_BACKOFF_MS +
+					 jitter);
+				do_send(ctx);
 			}
 			break;
 		}
@@ -375,6 +526,10 @@ struct ls_node_ctx *ls_init_node(const struct device *lora_dev)
 	k_sem_init(&ls_node_instance.result_sem,  0, 1);
 	k_mutex_init(&ls_node_instance.send_lock);
 	k_work_init(&ls_node_instance.pairing_work, pairing_work_handler);
+#if IS_ENABLED(CONFIG_LORA_STAR_NODE_ALWAYS_RX)
+	k_msgq_init(&ls_node_instance.rx_msgq, node_rx_msgq_buf,
+		    sizeof(struct node_rx_frame), NODE_RX_QUEUE_DEPTH);
+#endif
 
 	hwinfo_get_device_id(ls_node_instance.dev_eui,
 			     sizeof(ls_node_instance.dev_eui));

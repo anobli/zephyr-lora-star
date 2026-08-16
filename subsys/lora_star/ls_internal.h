@@ -34,6 +34,7 @@ struct downlink_entry {
 	uint8_t data[LS_MAX_PAYLOAD_SIZE];
 	uint8_t len;
 	bool    pending;
+	bool    direct; /* send as coordinator DATA frame, not ACK-piggybacked */
 };
 
 struct coord_rx_frame {
@@ -76,6 +77,13 @@ enum node_state {
 	NODE_WAITING_ACK,
 };
 
+#if IS_ENABLED(CONFIG_LORA_STAR_NODE_ALWAYS_RX)
+struct node_rx_frame {
+	uint8_t data[LS_MAX_FRAME_SIZE];
+	uint8_t len;
+};
+#endif
+
 struct ls_node_ctx {
 	const struct device     *lora_dev;
 	enum node_state          state;
@@ -97,6 +105,9 @@ struct ls_node_ctx {
 	struct k_sem             result_sem;
 	struct k_mutex           send_lock;
 	struct k_work            pairing_work;
+#if IS_ENABLED(CONFIG_LORA_STAR_NODE_ALWAYS_RX)
+	struct k_msgq            rx_msgq;
+#endif
 	struct lora_modem_config radio_cfg;
 };
 
