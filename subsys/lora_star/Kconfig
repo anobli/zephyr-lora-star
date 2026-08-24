@@ -39,12 +39,15 @@ config LORA_STAR_NODE
 	help
 	  Include the node state machine.
 
-config LORA_STAR_MAX_NODES
-	int "Maximum number of paired nodes (coordinator)"
-	default 16
-	depends on LORA_STAR_COORDINATOR
+config LORA_STAR_PAIRING
+	bool "Enable pairing support"
+	depends on (LORA_STAR_COORDINATOR || LORA_STAR_NODE)
 	help
-	  Size of the in-RAM node table.  Each entry is ~30 bytes.
+	  Include logic for pairing a node with a coordinator
+	  securely by using asymetric encryption for exchanging
+	  the network key.
+
+if LORA_STAR_PAIRING
 
 config LORA_STAR_PAIRING_WINDOW_S
 	int "Pairing window duration (seconds)"
@@ -54,9 +57,52 @@ config LORA_STAR_PAIRING_RSSI_THRESHOLD_DBM
 	int "Minimum RSSI for JOIN_REQ acceptance (dBm)"
 	default -60
 
-config LORA_STAR_RX_WINDOW_MS
-	int "RX window duration after a DATA frame (ms)"
+config LORA_STAR_PAIRING_CRYPTO_GUARD_MS
+	int "Extra guard time for coordinator ECDH processing during pairing (ms)"
 	default 1000
+	help
+	  After transmitting a JOIN_REQ the node waits for a JOIN_ACCEPT for
+	  airtime(JOIN_ACCEPT) + ACK_GUARD_MS + this value.  The extra guard
+	  covers the coordinator's ECDH key agreement computation, which takes
+	  200-500 ms in software on a typical Cortex-M MCU.  Increase if pairing
+	  consistently times out on slow hardware.
+
+endif
+
+config LORA_STAR_DEFAULT_NETWORK_KEY
+	bool "Use a compile-time default network key"
+	help
+	  When enabled, the stack loads LORA_STAR_DEFAULT_NETWORK_KEY_VALUE as
+	  the network key on every boot if Settings contains no persisted key.
+	  Useful for fixed deployments where all devices share a pre-configured
+	  key without going through the pairing procedure.  The Settings key
+	  always takes precedence when present.
+
+if LORA_STAR_DEFAULT_NETWORK_KEY
+
+config LORA_STAR_DEFAULT_NETWORK_KEY_VALUE
+	string "Default network key (32 lowercase hex characters)"
+	default "00112233445566778899aabbccddeeff"
+	help
+	  16-byte network key encoded as exactly 32 lowercase hexadecimal
+	  characters.  Change this value to a secret key before deploying.
+
+endif # LORA_STAR_DEFAULT_NETWORK_KEY
+
+config LORA_STAR_MAX_NODES
+	int "Maximum number of paired nodes (coordinator)"
+	default 16
+	depends on LORA_STAR_COORDINATOR
+	help
+	  Size of the in-RAM node table.  Each entry is ~30 bytes.
+
+config LORA_STAR_ACK_GUARD_MS
+	int "Guard time added to the ACK timeout on top of computed airtime (ms)"
+	default 100
+	help
+	  After transmitting a DATA frame, the node waits for an ACK for
+	  airtime(data) + airtime(ack) + this guard.  The guard covers the
+	  receiver's processing and TX-switch latency.
 
 config LORA_STAR_TX_MAX_RETRIES
 	int "Maximum uplink retries before reporting failure"
@@ -81,6 +127,22 @@ config LORA_STAR_TX_POWER_DBM
 	int "LoRa TX power (dBm)"
 	default 14
 
+config LORA_STAR_MSGQ_DEPTH
+	int "Depth of the MAC-to-stack receive queue (frames)"
+	default 8
+	help
+	  Number of received frames that can be buffered between the MAC RX
+	  callback and the protocol thread.  Increase if high traffic causes
+	  dropped frames logged as "RX queue full".
+
+config LORA_STAR_MAX_FRAME_CBS
+	int "Maximum number of registered frame callbacks"
+	default 5
+	help
+	  Size of the static callback registry.  One slot is consumed by
+	  ls_send_data_ack() while an ACK is pending; the rest are available
+	  to the application (pairing, data handlers, etc.).
+
 config LORA_STAR_THREAD_STACK_SIZE
 	int "Protocol thread stack size (bytes)"
 	default 2048
@@ -88,6 +150,31 @@ config LORA_STAR_THREAD_STACK_SIZE
 config LORA_STAR_THREAD_PRIORITY
 	int "Protocol thread priority"
 	default 5
+
+config LORA_STAR_TX_THREAD_STACK_SIZE
+	int "TX thread stack size (bytes)"
+	default 2048
+	help
+	  Stack for the internal thread that executes ls_send_data_async() and
+	  ls_send_data_ack_async() calls.  Must be large enough to cover the
+	  full radio TX call stack including AES-CTR/CMAC and lora_send.
+	  Increase if stack overflow is observed.
+
+config LORA_STAR_TX_THREAD_PRIORITY
+	int "TX thread priority"
+	default 6
+	help
+	  Must be a preemptive priority (>= 0) so the system workqueue thread
+	  remains free to service the LoRa radio DIO1 IRQ work item while the
+	  TX thread is blocked in lora_send().
+
+config LORA_STAR_TX_MSGQ_DEPTH
+	int "TX command queue depth"
+	default 4
+	help
+	  Number of async send commands that can be queued for the TX thread.
+	  ls_send_data_async() and ls_send_data_ack_async() return -ENOMEM if
+	  the queue is full.
 
 module = LORA_STAR
 module-str = lora_star
