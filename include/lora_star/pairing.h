@@ -182,7 +182,6 @@ struct ls_node_pairing_ctx {
 	uint8_t                  _priv_key[LS_PUBKEY_SIZE];
 	uint8_t                  _pub_key[LS_PUBKEY_SIZE];
 	uint8_t                  _nonce[LS_NONCE_SIZE];
-	struct k_sem             _done_sem;
 	int                      _result;
 	struct ls_frame_handler *_join_accept_hdl;
 	/** @endcond */

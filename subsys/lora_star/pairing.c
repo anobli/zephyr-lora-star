@@ -20,6 +20,7 @@
 #include <lora_star/pairing.h>
 
 #include "storage.h"
+#include "event.h"
 
 LOG_MODULE_REGISTER(ls_pairing, CONFIG_LORA_STAR_LOG_LEVEL);
 
@@ -217,15 +218,6 @@ out:
 	return (st == PSA_SUCCESS) ? 0 : -EIO;
 }
 
-/*
- * In-place AES-128-CTR transform using the ephemeral pairing key.
- *
- * Used to encrypt/decrypt the JOIN_ACCEPT payload blob
- * (short_addr_LE(2) || network_key(16) = 18 bytes).  Because CTR XORs the
- * input with a keystream, the same call both encrypts and decrypts.
- *
- * Nonce: Nonce(4B) || 0x00…(12B) — ties the keystream to this pairing session.
- */
 /* --------------------------------------------------------------------------
  * Coordinator side
  * -------------------------------------------------------------------------- */
@@ -317,9 +309,9 @@ static int pairing_join_req_cb(struct ls_ctx *ctx, struct ls_frame *frame,
 		return 0;
 	}
 
-	if ((int8_t)frame->rssi < CONFIG_LORA_STAR_PAIRING_RSSI_THRESHOLD_DBM) {
+	if (frame->rssi < CONFIG_LORA_STAR_PAIRING_RSSI_THRESHOLD_DBM) {
 		LOG_DBG("JOIN_REQ rejected: RSSI %d dBm < threshold %d dBm",
-			(int8_t)frame->rssi,
+			frame->rssi,
 			CONFIG_LORA_STAR_PAIRING_RSSI_THRESHOLD_DBM);
 		return 0;
 	}
@@ -525,6 +517,14 @@ int ls_pairing_coord_start(struct ls_coord_pairing_ctx *pair_ctx)
 
 #ifdef CONFIG_LORA_STAR_NODE
 
+/*
+ * Called by the LoRa Star thread (from ls_dispatch_frame) when a JOIN_ACCEPT
+ * arrives.  Verifies the pairing MIC, recovers the session key and short
+ * address, and stores the result in pair_ctx->_result.  Returns -1 to consume
+ * the frame on success or crypto error; returns 0 (not consumed) if the MIC
+ * does not match (e.g. a JOIN_ACCEPT from a different coordinator or network),
+ * which tells the thread to restart the retry timer and keep waiting.
+ */
 static int pairing_join_accept_cb(struct ls_ctx *ctx, struct ls_frame *frame,
 				  void *user_data)
 {
@@ -549,11 +549,6 @@ static int pairing_join_accept_cb(struct ls_ctx *ctx, struct ls_frame *frame,
 
 	ja = (const struct ls_join_accept_payload *)payload;
 
-	/*
-	 * Run ECDH to recover the shared secret.  Both sides use their own
-	 * private key and the peer's public key; the X25519 function guarantees
-	 * both compute the same 32-byte value.
-	 */
 	ret = pairing_ecdh_shared(pair_ctx->_priv_key, ja->coord_pub_key, shared);
 	if (ret < 0) {
 		LOG_ERR("ECDH failed");
@@ -570,9 +565,8 @@ static int pairing_join_accept_cb(struct ls_ctx *ctx, struct ls_frame *frame,
 
 	/*
 	 * Verify the JOIN_ACCEPT MIC using the freshly derived pairing key.
-	 * A match proves that the coordinator ran the same ECDH exchange and
-	 * used the same DevEUI and Nonce, and that the frame was not tampered
-	 * with in transit.
+	 * Return 0 (not consumed) on mismatch so the thread restarts the retry
+	 * timer and keeps waiting — this JOIN_ACCEPT was not for us.
 	 */
 	ret = ls_frame_check_signature(frame, pairing_key);
 	if (ret < 0) {
@@ -581,11 +575,6 @@ static int pairing_join_accept_cb(struct ls_ctx *ctx, struct ls_frame *frame,
 		return 0;
 	}
 
-	/*
-	 * Decrypt enc_payload to recover short_addr_LE(2) || network_key(16).
-	 * The coordinator encrypted this blob with the same pairing key and
-	 * nonce, so running CTR again recovers the plaintext.
-	 */
 	memcpy(dec_buf, ja->enc_payload, sizeof(dec_buf));
 	memset(ctr_nonce, 0, sizeof(ctr_nonce));
 	memcpy(ctr_nonce, pair_ctx->_nonce, LS_NONCE_SIZE);
@@ -611,16 +600,42 @@ static int pairing_join_accept_cb(struct ls_ctx *ctx, struct ls_frame *frame,
 
 	LOG_INF("Joined — ShortAddr 0x%04x", short_addr);
 	pair_ctx->_result = 0;
-	k_sem_give(&pair_ctx->_done_sem);
 	return -1;
 
 fail:
-	pair_ctx->_result = ret < 0 ? ret : -EIO;
-	k_sem_give(&pair_ctx->_done_sem);
+	pair_ctx->_result = (ret < 0) ? ret : -EIO;
 	return -1;
 }
 
-static int node_pairing_run(struct ls_ctx *ctx, struct ls_node_pairing_ctx *pair_ctx)
+/*
+ * Called by the LoRa Star thread after a JOIN_ACCEPT was received and
+ * dispatched (ret=0), or after all retries are exhausted (ret=-ETIMEDOUT),
+ * or after a hard send failure (ret<0).  Delivers the final result to the
+ * application via pair_ctx->done_cb.
+ */
+static void pairing_node_done_cb(int ret, void *user_data)
+{
+	struct ls_node_pairing_ctx *pair_ctx = user_data;
+	int result = (ret == 0) ? pair_ctx->_result : ret;
+
+	ls_unregister_frame_cb(pair_ctx->_ctx, pair_ctx->_join_accept_hdl);
+	pair_ctx->_join_accept_hdl = NULL;
+
+	if (pair_ctx->done_cb) {
+		pair_ctx->done_cb(pair_ctx->_ctx, result, pair_ctx->done_user_data);
+	}
+}
+
+/**
+ * @brief Start node pairing asynchronously.
+ *
+ * Generates a fresh ECDH keypair and nonce, builds and signs a JOIN_REQ frame
+ * (all synchronous crypto happens in the caller's context), then posts a
+ * LS_EVENT_TX_RAW event to the LoRa Star queue.  The thread handles
+ * transmission, response waiting, and retries transparently.  The result is
+ * delivered via pair_ctx->done_cb from the LoRa Star thread context.
+ */
+int ls_pairing_node_start(struct ls_ctx *ctx, struct ls_node_pairing_ctx *pair_ctx)
 {
 	static const struct ls_frame_filter ja_filter = {
 		.type = LS_TYPE_JOIN_ACCEPT,
@@ -632,13 +647,19 @@ static int node_pairing_run(struct ls_ctx *ctx, struct ls_node_pairing_ctx *pair
 	uint8_t frame_buf[LS_FRAME_SIZE(LS_JOIN_REQ_PAYLOAD_SIZE)];
 	uint8_t jr_key[LS_NETWORK_KEY_SIZE];
 	uint32_t window_ms;
-	int retry;
 	int ret;
 
-	k_sem_init(&pair_ctx->_done_sem, 0, 1);
+	if (ctx == NULL || pair_ctx == NULL) {
+		return -EINVAL;
+	}
+
+	pair_ctx->_ctx    = ctx;
 	pair_ctx->_result = -ETIMEDOUT;
 
-	sys_csrand_get(pair_ctx->_nonce, sizeof(pair_ctx->_nonce));
+	ret = sys_csrand_get(pair_ctx->_nonce, sizeof(pair_ctx->_nonce));
+	if (ret < 0) {
+		return ret;
+	}
 
 	ret = pairing_ecdh_gen_keypair(pair_ctx->_pub_key, pair_ctx->_priv_key);
 	if (ret < 0) {
@@ -660,102 +681,53 @@ static int node_pairing_run(struct ls_ctx *ctx, struct ls_node_pairing_ctx *pair
 
 	pairing_join_req_mic_key(pair_ctx->dev_eui, jr_key);
 
+	ret = ls_frame_init(&frame, LS_JOIN_REQ_PAYLOAD_SIZE,
+			    frame_buf, sizeof(frame_buf));
+	if (ret < 0) {
+		goto cleanup;
+	}
+
+	ls_frame_set_type(&frame, LS_TYPE_JOIN_REQ);
+	ls_frame_set_src(&frame, LS_BCAST_ADDR);
+	ls_frame_set_dst(&frame, LS_BCAST_ADDR);
+	ls_frame_set_fcnt(&frame, 0);
+	ls_frame_set_flags(&frame, 0);
+	ls_frame_set_payload(&frame, (const uint8_t *)&jr);
+
 	/*
-	 * RX window starts after our JOIN_REQ TX is already complete, so we
-	 * only budget for the coordinator's ECDH processing time, the
-	 * JOIN_ACCEPT airtime, and the normal TX-switch guard.
+	 * Sign with the DevEUI-based MIC key.  Both sides derive the same key
+	 * from the public DevEUI; this provides frame integrity without a
+	 * pre-shared secret.
+	 */
+	ret = ls_frame_sign(&frame, jr_key);
+	memset(jr_key, 0, sizeof(jr_key));
+	if (ret < 0) {
+		goto cleanup;
+	}
+
+	/*
+	 * RX window: coordinator ECDH processing + JOIN_ACCEPT airtime + guard.
+	 * The thread uses this as the per-attempt timeout (retried up to
+	 * CONFIG_LORA_STAR_TX_MAX_RETRIES times).
 	 */
 	window_ms = ls_mac_airtime_ms(ctx, LS_FRAME_SIZE(LS_JOIN_ACCEPT_PAYLOAD_SIZE))
 		  + CONFIG_LORA_STAR_ACK_GUARD_MS
 		  + CONFIG_LORA_STAR_PAIRING_CRYPTO_GUARD_MS;
 
-	ret = -ETIMEDOUT;
-
-	for (retry = 0; retry <= CONFIG_LORA_STAR_TX_MAX_RETRIES; retry++) {
-		ret = ls_frame_init(&frame, LS_JOIN_REQ_PAYLOAD_SIZE,
-				    frame_buf, sizeof(frame_buf));
-		if (ret < 0) {
-			break;
-		}
-
-		ls_frame_set_type(&frame, LS_TYPE_JOIN_REQ);
-		ls_frame_set_src(&frame, LS_BCAST_ADDR);
-		ls_frame_set_dst(&frame, LS_BCAST_ADDR);
-		ls_frame_set_fcnt(&frame, 0);
-		ls_frame_set_flags(&frame, 0);
-		ls_frame_set_payload(&frame, (const uint8_t *)&jr);
-
-		/*
-		 * Sign with the DevEUI-based MIC key before TX.  This is done
-		 * here (not by the MAC) because JOIN_REQ uses a pairing-specific
-		 * key that the MAC layer does not know about.
-		 */
-		ret = ls_frame_sign(&frame, jr_key);
-		if (ret < 0) {
-			break;
-		}
-
-		ret = ls_mac_send(ctx, &frame);
-		if (ret < 0) {
-			break;
-		}
-
-		ls_mac_recv(ctx);
-
-		if (k_sem_take(&pair_ctx->_done_sem, K_MSEC(window_ms)) == 0) {
-			ret = pair_ctx->_result;
-			ls_mac_rx_stop(ctx);
-			break;
-		}
-
-		ret = -ETIMEDOUT;
-		ls_mac_rx_stop(ctx);
-
-		if (retry < CONFIG_LORA_STAR_TX_MAX_RETRIES) {
-			k_sleep(K_MSEC(CONFIG_LORA_STAR_TX_RETRY_BACKOFF_MS +
-				       (sys_rand32_get() %
-					CONFIG_LORA_STAR_TX_RETRY_BACKOFF_MS)));
-		}
+	ret = ls_send_raw_async(ctx, frame_buf, sizeof(frame_buf),
+				true, LS_TYPE_JOIN_ACCEPT, LS_COORD_ADDR,
+				window_ms, pairing_node_done_cb, pair_ctx);
+	if (ret == 0) {
+		return 0;
 	}
 
+cleanup:
 	memset(jr_key, 0, sizeof(jr_key));
 	ls_unregister_frame_cb(ctx, pair_ctx->_join_accept_hdl);
 	pair_ctx->_join_accept_hdl = NULL;
-
-	if (ctx->always_on_rx) {
-		ls_mac_recv(ctx);
-	}
-
+	memset(pair_ctx->_priv_key, 0, sizeof(pair_ctx->_priv_key));
+	memset(pair_ctx->_pub_key, 0, sizeof(pair_ctx->_pub_key));
 	return ret;
-}
-
-extern int ls_tx_schedule(struct ls_ctx *ctx,
-			  int (*fn)(struct ls_ctx *, void *), void *arg,
-			  ls_send_cb done_cb);
-
-static int pairing_node_run_fn(struct ls_ctx *ctx, void *arg)
-{
-	return node_pairing_run(ctx, arg);
-}
-
-static void pairing_node_done_cb(int ret, void *user_data)
-{
-	struct ls_node_pairing_ctx *pair_ctx = user_data;
-
-	if (pair_ctx->done_cb) {
-		pair_ctx->done_cb(pair_ctx->_ctx, ret, pair_ctx->done_user_data);
-	}
-}
-
-int ls_pairing_node_start(struct ls_ctx *ctx, struct ls_node_pairing_ctx *pair_ctx)
-{
-	if (ctx == NULL || pair_ctx == NULL) {
-		return -EINVAL;
-	}
-
-	pair_ctx->_ctx = ctx;
-	return ls_tx_schedule(ctx, pairing_node_run_fn, pair_ctx,
-			      pairing_node_done_cb);
 }
 
 #endif /* CONFIG_LORA_STAR_NODE */

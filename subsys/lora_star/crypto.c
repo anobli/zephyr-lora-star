@@ -141,7 +141,7 @@ int ls_frame_decrypt(struct ls_frame *frame, const uint8_t key[LS_NETWORK_KEY_SI
 	return ls_frame_crypto_ctr(frame, key, 0);
 }
 
-static int ls_crypto_compute_mic(const uint8_t *buf, uint8_t buf_len,
+static int ls_crypto_compute_mic(const uint8_t *buf, size_t buf_len,
 				 const uint8_t key[LS_NETWORK_KEY_SIZE],
 				 uint8_t mic[LS_MIC_SIZE])
 {
@@ -210,9 +210,9 @@ int ls_frame_check_signature(struct ls_frame *frame, const uint8_t key[LS_NETWOR
 		return ret;
 	}
 
-        if (mbedtls_ct_memcmp(rx_mic, exp_mic, LS_MIC_SIZE) != 0) {
-                return -EIO;
-        }
+	if (mbedtls_ct_memcmp(rx_mic, exp_mic, LS_MIC_SIZE) != 0) {
+		return -EIO;
+	}
 
 	return 0;
 }

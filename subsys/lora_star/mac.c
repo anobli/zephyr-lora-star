@@ -7,12 +7,14 @@
 #include <lora_star/radio.h>
 #include <lora_star/crypto.h>
 
+#include "event.h"
+
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(ls_mac, CONFIG_LORA_STAR_LOG_LEVEL);
 
 int ls_mac_init(struct ls_ctx *ctx)
 {
-        return ls_radio_init(ctx->radio_dev);
+	return ls_radio_init(ctx->radio_dev);
 }
 
 int ls_mac_send(struct ls_ctx *ctx, struct ls_frame *frame)
@@ -46,7 +48,7 @@ int ls_mac_send(struct ls_ctx *ctx, struct ls_frame *frame)
 	}
 
 	if (ctx->always_on_rx) {
-		LOG_DBG("Stoping radio RX operations");
+		LOG_DBG("Stopping radio RX operations");
 		ls_radio_rx_stop(ctx->radio_dev);
 	}
 
@@ -64,7 +66,7 @@ static void mac_recv_cb(const struct device *dev, uint8_t *data, uint16_t size,
 			int16_t rssi, int8_t snr, void *user_data)
 {
 	struct ls_ctx *ctx = user_data;
-	struct ls_frame frame;
+	struct ls_event ev;
 	uint8_t type;
 	int ret;
 
@@ -75,35 +77,36 @@ static void mac_recv_cb(const struct device *dev, uint8_t *data, uint16_t size,
 		return;
 	}
 
-	ret = ls_frame_alloc_buf(&frame, size - LS_OVERHEAD_SIZE);
+	ret = ls_frame_alloc_buf(&ev.rx, size - LS_OVERHEAD_SIZE);
 	if (ret) {
 		LOG_WRN("Failed to allocate frame buffer");
 		return;
 	}
 
-	frame.rssi = (uint8_t)rssi;
-	memcpy(frame.buf, data, size);
+	ev.type   = LS_EVENT_RX;
+	ev.rx.rssi = (int8_t)rssi;
+	memcpy(ev.rx.buf, data, size);
 
-	type = ls_frame_get_type(&frame);
+	type = ls_frame_get_type(&ev.rx);
 
 	if (type == LS_TYPE_DATA || type == LS_TYPE_ACK) {
-		ret = ls_frame_check_signature(&frame, ctx->network_key);
+		ret = ls_frame_check_signature(&ev.rx, ctx->network_key);
 		if (ret) {
 			LOG_WRN("MIC check failed, dropping frame");
-			ls_frame_free_buf(&frame);
+			ls_frame_free_buf(&ev.rx);
 			return;
 		}
-		ret = ls_frame_decrypt(&frame, ctx->network_key);
+		ret = ls_frame_decrypt(&ev.rx, ctx->network_key);
 		if (ret) {
 			LOG_WRN("Decryption failed, dropping frame");
-			ls_frame_free_buf(&frame);
+			ls_frame_free_buf(&ev.rx);
 			return;
 		}
 	}
 
-	if (k_msgq_put(&ctx->_msgq, &frame, K_NO_WAIT) < 0) {
+	if (k_msgq_put(ctx->_msgq, &ev, K_NO_WAIT) < 0) {
 		LOG_WRN("RX queue full, frame dropped");
-		ls_frame_free_buf(&frame);
+		ls_frame_free_buf(&ev.rx);
 	}
 }
 

@@ -128,53 +128,35 @@ config LORA_STAR_TX_POWER_DBM
 	default 14
 
 config LORA_STAR_MSGQ_DEPTH
-	int "Depth of the MAC-to-stack receive queue (frames)"
+	int "Unified event queue depth"
 	default 8
 	help
-	  Number of received frames that can be buffered between the MAC RX
-	  callback and the protocol thread.  Increase if high traffic causes
-	  dropped frames logged as "RX queue full".
+	  Number of events (received frames, TX commands, and timeout
+	  notifications) that can be buffered in the shared protocol queue.
+	  Increase if high traffic causes frames to be dropped.
 
 config LORA_STAR_MAX_FRAME_CBS
 	int "Maximum number of registered frame callbacks"
 	default 5
 	help
-	  Size of the static callback registry.  One slot is consumed by
-	  ls_send_data_ack() while an ACK is pending; the rest are available
-	  to the application (pairing, data handlers, etc.).
+	  Size of the static callback registry.  Slots are consumed by
+	  pairing handlers and application data handlers.
 
 config LORA_STAR_THREAD_STACK_SIZE
 	int "Protocol thread stack size (bytes)"
 	default 2048
+	help
+	  Stack for the single LoRa Star protocol thread.  Must be large enough
+	  to cover the full radio TX/RX call stack including AES-CTR/CMAC and
+	  lora_send/lora_recv_async.  Increase if stack overflow is observed.
 
 config LORA_STAR_THREAD_PRIORITY
 	int "Protocol thread priority"
 	default 5
-
-config LORA_STAR_TX_THREAD_STACK_SIZE
-	int "TX thread stack size (bytes)"
-	default 2048
-	help
-	  Stack for the internal thread that executes ls_send_data_async() and
-	  ls_send_data_ack_async() calls.  Must be large enough to cover the
-	  full radio TX call stack including AES-CTR/CMAC and lora_send.
-	  Increase if stack overflow is observed.
-
-config LORA_STAR_TX_THREAD_PRIORITY
-	int "TX thread priority"
-	default 6
 	help
 	  Must be a preemptive priority (>= 0) so the system workqueue thread
 	  remains free to service the LoRa radio DIO1 IRQ work item while the
-	  TX thread is blocked in lora_send().
-
-config LORA_STAR_TX_MSGQ_DEPTH
-	int "TX command queue depth"
-	default 4
-	help
-	  Number of async send commands that can be queued for the TX thread.
-	  ls_send_data_async() and ls_send_data_ack_async() return -ENOMEM if
-	  the queue is full.
+	  protocol thread is blocked in lora_send().
 
 module = LORA_STAR
 module-str = lora_star

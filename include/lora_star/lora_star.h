@@ -100,8 +100,7 @@ struct ls_ctx {
 	bool always_on_rx;
 
 	/** @cond INTERNAL */
-	struct k_msgq  _msgq;
-	uint8_t        _msgq_buf[CONFIG_LORA_STAR_MSGQ_DEPTH * sizeof(struct ls_frame)];
+	struct k_msgq          *_msgq;
 	struct ls_frame_handler _handlers[CONFIG_LORA_STAR_MAX_FRAME_CBS];
 	struct k_mutex          _handlers_lock;
 	/** @endcond */

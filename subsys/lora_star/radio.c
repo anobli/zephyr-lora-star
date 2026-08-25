@@ -30,8 +30,8 @@ int ls_radio_init(const struct device *lora_dev)
 
 	ret = lora_config(lora_dev, &radio_tx_cfg);
 	if (ret) {
-                LOG_ERR("Failed to config radio: %d", ret);
-                return -EIO;
+		LOG_ERR("Failed to config radio: %d", ret);
+		return -EIO;
 	}
 
 	return 0;
@@ -43,15 +43,15 @@ int ls_radio_tx(const struct device *lora_dev, uint8_t *data, size_t len)
 
 	ret = lora_config(lora_dev, &radio_tx_cfg);
 	if (ret) {
-                LOG_ERR("TX config failed: %d", ret);
-                return -EIO;
+		LOG_ERR("TX config failed: %d", ret);
+		return -EIO;
 	}
 
 	ret = lora_send(lora_dev, data, len);
-        if (ret != 0) {
-                LOG_ERR("lora_send failed: %d", ret);
-                return -EIO;
-        }
+	if (ret != 0) {
+		LOG_ERR("lora_send failed: %d", ret);
+		return -EIO;
+	}
 
 	return 0;
 }
@@ -66,8 +66,8 @@ int ls_radio_rx_start(const struct device *lora_dev, lora_recv_cb rx_cb, void *u
 
 	ret = lora_config(lora_dev, &radio_rx_cfg);
 	if (ret) {
-                LOG_ERR("RX config failed: %d", ret);
-                return -EIO;
+		LOG_ERR("RX config failed: %d", ret);
+		return -EIO;
 	}
 
 	return lora_recv_async(lora_dev, rx_cb, user_data);

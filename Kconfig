@@ -1,1 +1,2 @@
 rsource "subsys/lora_star/Kconfig"
+rsource "drivers/lora/Kconfig"

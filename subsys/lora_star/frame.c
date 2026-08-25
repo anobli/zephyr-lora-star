@@ -29,12 +29,14 @@ int ls_frame_init(struct ls_frame *frame, size_t payload_len, uint8_t *buf, size
 
 int ls_frame_alloc_buf(struct ls_frame *frame, size_t payload_len)
 {
-	frame->buf = k_malloc(sizeof(*frame) + ls_frame_size(payload_len));
+	size_t sz = ls_frame_size(payload_len);
+
+	frame->buf = k_malloc(sz);
 	if (!frame->buf) {
 		return -ENOMEM;
 	}
 
-	frame->buf_size = ls_frame_size(payload_len);
+	frame->buf_size    = sz;
 	frame->payload_len = payload_len;
 
 	return 0;

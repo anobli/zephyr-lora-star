@@ -46,7 +46,6 @@
 #define LS_FLAG_ACK_PENDING BIT(1) /**< ACK carries a downlink payload */
 
 #define LS_HDR_SIZE      (sizeof(struct ls_frame_hdr)) /**< Fixed header size in bytes */
-#define LS_HEADER_SIZE   LS_HDR_SIZE                   /**< Alias for @ref LS_HDR_SIZE */
 #define LS_MIC_SIZE      4U                             /**< MIC size in bytes */
 #define LS_OVERHEAD_SIZE (LS_HDR_SIZE + LS_MIC_SIZE)
 #define LS_MAX_FRAME_SIZE    128U /**< Maximum total frame size in bytes */
@@ -74,7 +73,8 @@ struct ls_frame {
 	uint8_t *buf;         /**< Pointer to the raw frame buffer */
 	size_t   buf_size;    /**< Total size of @p buf in bytes */
 	size_t   payload_len; /**< Application payload length in bytes */
-	uint8_t  rssi;
+	/** RSSI of the received frame in dBm (negative). */
+	int8_t   rssi;
 };
 
 /**

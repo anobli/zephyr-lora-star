@@ -1,2 +1,3 @@
 zephyr_include_directories(include)
 add_subdirectory_ifdef(CONFIG_LORA_STAR subsys/lora_star)
+add_subdirectory_ifdef(CONFIG_LORA_FAKE drivers/lora)
