@@ -24,54 +24,109 @@ ZTEST(lora_star_frame, test_frame_size)
  * Initialisation
  * -------------------------------------------------------------------------- */
 
-ZTEST(lora_star_frame, test_init_no_payload)
+ZTEST(lora_star_frame, test_init_zeros_payload_len)
 {
-	uint8_t buf[LS_OVERHEAD_SIZE];
 	struct ls_frame frame;
-	int ret = ls_frame_init(&frame, 0, buf, sizeof(buf));
 
-	zassert_equal(ret, 0);
+	ls_frame_init(&frame);
+
 	zassert_equal(frame.payload_len, 0);
-	zassert_equal(frame.buf, buf);
 }
 
-ZTEST(lora_star_frame, test_init_with_payload)
+/* --------------------------------------------------------------------------
+ * ls_frame_set_payload — size validation and data copying
+ * -------------------------------------------------------------------------- */
+
+ZTEST(lora_star_frame, test_set_payload_one_byte)
 {
-	uint8_t buf[LS_OVERHEAD_SIZE + 10];
 	struct ls_frame frame;
-	int ret = ls_frame_init(&frame, 10, buf, sizeof(buf));
+	uint8_t data[1] = {0xAB};
+	uint8_t *out;
+	size_t len;
+	int ret;
+
+	ls_frame_init(&frame);
+	ret = ls_frame_set_payload(&frame, data, 1);
 
 	zassert_equal(ret, 0);
-	zassert_equal(frame.payload_len, 10);
+	zassert_equal(frame.payload_len, 1);
+	ls_frame_get_payload(&frame, &out, &len);
+	zassert_equal(out[0], 0xAB);
 }
 
-ZTEST(lora_star_frame, test_init_buffer_too_small)
+ZTEST(lora_star_frame, test_set_payload_mid_size)
 {
-	uint8_t buf[LS_OVERHEAD_SIZE - 1];
 	struct ls_frame frame;
-	int ret = ls_frame_init(&frame, 0, buf, sizeof(buf));
+	uint8_t data[32] = {0};
+	int ret;
 
-	zassert_equal(ret, -ENOMEM);
+	data[0] = 0x11;
+	data[31] = 0xFF;
+
+	ls_frame_init(&frame);
+	ret = ls_frame_set_payload(&frame, data, sizeof(data));
+
+	zassert_equal(ret, 0);
+	zassert_equal(frame.payload_len, 32);
 }
 
-ZTEST(lora_star_frame, test_init_join_req_payload_size)
+ZTEST(lora_star_frame, test_set_payload_join_req_size)
 {
-	uint8_t buf[LS_FRAME_SIZE(LS_JOIN_REQ_PAYLOAD_SIZE)];
 	struct ls_frame frame;
-	int ret = ls_frame_init(&frame, LS_JOIN_REQ_PAYLOAD_SIZE, buf, sizeof(buf));
+	uint8_t data[LS_JOIN_REQ_PAYLOAD_SIZE] = {0};
+	int ret;
+
+	ls_frame_init(&frame);
+	ret = ls_frame_set_payload(&frame, data, LS_JOIN_REQ_PAYLOAD_SIZE);
 
 	zassert_equal(ret, 0);
 	zassert_equal(frame.payload_len, LS_JOIN_REQ_PAYLOAD_SIZE);
 }
 
-ZTEST(lora_star_frame, test_init_max_payload)
+ZTEST(lora_star_frame, test_set_payload_max_size)
 {
-	uint8_t buf[LS_MAX_FRAME_SIZE];
 	struct ls_frame frame;
-	int ret = ls_frame_init(&frame, LS_MAX_PAYLOAD_SIZE, buf, sizeof(buf));
+	uint8_t data[LS_MAX_PAYLOAD_SIZE] = {0};
+	int ret;
+
+	ls_frame_init(&frame);
+	ret = ls_frame_set_payload(&frame, data, LS_MAX_PAYLOAD_SIZE);
 
 	zassert_equal(ret, 0);
 	zassert_equal(frame.payload_len, LS_MAX_PAYLOAD_SIZE);
+}
+
+ZTEST(lora_star_frame, test_set_payload_overflow)
+{
+	struct ls_frame frame;
+	uint8_t data[LS_MAX_PAYLOAD_SIZE + 1] = {0};
+	int ret;
+
+	ls_frame_init(&frame);
+	ret = ls_frame_set_payload(&frame, data, LS_MAX_PAYLOAD_SIZE + 1);
+
+	zassert_equal(ret, -EINVAL);
+	/* frame must be unmodified */
+	zassert_equal(frame.payload_len, 0);
+}
+
+ZTEST(lora_star_frame, test_set_payload_copies_data)
+{
+	uint8_t data_in[8] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08};
+	uint8_t *data_out;
+	size_t len;
+	struct ls_frame frame;
+	int ret;
+
+	ls_frame_init(&frame);
+	ret = ls_frame_set_payload(&frame, data_in, 8);
+
+	zassert_equal(ret, 0);
+	ls_frame_get_payload(&frame, &data_out, &len);
+	zassert_equal(len, 8);
+	zassert_mem_equal(data_out, data_in, 8);
+	/* Zero-copy: pointer must be inside frame.buf */
+	zassert_true(data_out >= frame.buf && data_out < frame.buf + sizeof(frame.buf));
 }
 
 /* --------------------------------------------------------------------------
@@ -80,10 +135,9 @@ ZTEST(lora_star_frame, test_init_max_payload)
 
 ZTEST(lora_star_frame, test_field_type)
 {
-	uint8_t buf[LS_OVERHEAD_SIZE];
 	struct ls_frame frame;
 
-	ls_frame_init(&frame, 0, buf, sizeof(buf));
+	ls_frame_init(&frame);
 
 	ls_frame_set_type(&frame, LS_TYPE_ACK);
 	zassert_equal(ls_frame_get_type(&frame), LS_TYPE_ACK);
@@ -94,10 +148,9 @@ ZTEST(lora_star_frame, test_field_type)
 
 ZTEST(lora_star_frame, test_field_src_dst)
 {
-	uint8_t buf[LS_OVERHEAD_SIZE];
 	struct ls_frame frame;
 
-	ls_frame_init(&frame, 0, buf, sizeof(buf));
+	ls_frame_init(&frame);
 	ls_frame_set_src(&frame, 0x0001);
 	ls_frame_set_dst(&frame, LS_COORD_ADDR);
 
@@ -107,10 +160,9 @@ ZTEST(lora_star_frame, test_field_src_dst)
 
 ZTEST(lora_star_frame, test_field_fcnt)
 {
-	uint8_t buf[LS_OVERHEAD_SIZE];
 	struct ls_frame frame;
 
-	ls_frame_init(&frame, 0, buf, sizeof(buf));
+	ls_frame_init(&frame);
 	ls_frame_set_fcnt(&frame, 0xDEADBEEF);
 
 	zassert_equal(ls_frame_get_fcnt(&frame), 0xDEADBEEF);
@@ -118,41 +170,21 @@ ZTEST(lora_star_frame, test_field_fcnt)
 
 ZTEST(lora_star_frame, test_field_flags)
 {
-	uint8_t buf[LS_OVERHEAD_SIZE];
 	struct ls_frame frame;
 
-	ls_frame_init(&frame, 0, buf, sizeof(buf));
+	ls_frame_init(&frame);
 	ls_frame_set_flags(&frame, LS_FLAG_ACK_REQ | LS_FLAG_ACK_PENDING);
 
 	zassert_equal(ls_frame_get_flags(&frame), LS_FLAG_ACK_REQ | LS_FLAG_ACK_PENDING);
 }
 
-ZTEST(lora_star_frame, test_field_payload)
-{
-	uint8_t buf[LS_OVERHEAD_SIZE + 8];
-	uint8_t data_in[8] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08};
-	uint8_t *data_out;
-	size_t len;
-	struct ls_frame frame;
-
-	ls_frame_init(&frame, 8, buf, sizeof(buf));
-	ls_frame_set_payload(&frame, data_in);
-	ls_frame_get_payload(&frame, &data_out, &len);
-
-	zassert_equal(len, 8);
-	zassert_mem_equal(data_out, data_in, 8);
-	/* Zero-copy: pointer must be inside buf */
-	zassert_true(data_out >= buf && data_out < buf + sizeof(buf));
-}
-
 ZTEST(lora_star_frame, test_field_mic)
 {
-	uint8_t buf[LS_OVERHEAD_SIZE];
 	uint8_t mic_in[LS_MIC_SIZE] = {0x11, 0x22, 0x33, 0x44};
 	uint8_t mic_out[LS_MIC_SIZE];
 	struct ls_frame frame;
 
-	ls_frame_init(&frame, 0, buf, sizeof(buf));
+	ls_frame_init(&frame);
 	ls_frame_set_mic(&frame, mic_in);
 	ls_frame_get_mic(&frame, mic_out);
 
@@ -161,10 +193,11 @@ ZTEST(lora_star_frame, test_field_mic)
 
 ZTEST(lora_star_frame, test_content_size)
 {
-	uint8_t buf[LS_OVERHEAD_SIZE + 10];
 	struct ls_frame frame;
+	uint8_t dummy[10] = {0};
 
-	ls_frame_init(&frame, 10, buf, sizeof(buf));
+	ls_frame_init(&frame);
+	ls_frame_set_payload(&frame, dummy, 10);
 
 	zassert_equal(ls_frame_content_size(&frame), LS_HDR_SIZE + 10);
 }
@@ -175,10 +208,9 @@ ZTEST(lora_star_frame, test_content_size)
 
 ZTEST(lora_star_frame, test_little_endian_layout)
 {
-	uint8_t buf[LS_OVERHEAD_SIZE];
 	struct ls_frame frame;
 
-	ls_frame_init(&frame, 0, buf, sizeof(buf));
+	ls_frame_init(&frame);
 	ls_frame_set_type(&frame, LS_TYPE_ACK);
 	ls_frame_set_src(&frame, 0x1234);
 	ls_frame_set_dst(&frame, 0x5678);
@@ -186,29 +218,28 @@ ZTEST(lora_star_frame, test_little_endian_layout)
 	ls_frame_set_flags(&frame, 0x03);
 
 	/* TYPE(1) | SRC(2) | DST(2) | FCNT(4) | FLAGS(1) */
-	zassert_equal(buf[0], LS_TYPE_ACK);
+	zassert_equal(frame.buf[0], LS_TYPE_ACK);
 	/* SRC at buf[1..2], little-endian */
-	zassert_equal(buf[1], 0x34);
-	zassert_equal(buf[2], 0x12);
+	zassert_equal(frame.buf[1], 0x34);
+	zassert_equal(frame.buf[2], 0x12);
 	/* DST at buf[3..4], little-endian */
-	zassert_equal(buf[3], 0x78);
-	zassert_equal(buf[4], 0x56);
+	zassert_equal(frame.buf[3], 0x78);
+	zassert_equal(frame.buf[4], 0x56);
 	/* FCNT at buf[5..8], little-endian */
-	zassert_equal(buf[5], 0xCD);
-	zassert_equal(buf[6], 0xAB);
-	zassert_equal(buf[7], 0x00);
-	zassert_equal(buf[8], 0x00);
+	zassert_equal(frame.buf[5], 0xCD);
+	zassert_equal(frame.buf[6], 0xAB);
+	zassert_equal(frame.buf[7], 0x00);
+	zassert_equal(frame.buf[8], 0x00);
 	/* FLAGS at buf[9] */
-	zassert_equal(buf[9], 0x03);
+	zassert_equal(frame.buf[9], 0x03);
 }
 
 /* --------------------------------------------------------------------------
- * Round-trip: set all fields, re-wrap same buffer, read all fields back
+ * Round-trip: set all fields, copy wire bytes, read all fields back
  * -------------------------------------------------------------------------- */
 
 ZTEST(lora_star_frame, test_round_trip)
 {
-	uint8_t buf[LS_OVERHEAD_SIZE + 8];
 	uint8_t payload_in[8] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08};
 	uint8_t mic_in[LS_MIC_SIZE] = {0xAA, 0xBB, 0xCC, 0xDD};
 	uint8_t mic_out[LS_MIC_SIZE];
@@ -216,17 +247,19 @@ ZTEST(lora_star_frame, test_round_trip)
 	size_t payload_len;
 	struct ls_frame tx, rx;
 
-	ls_frame_init(&tx, 8, buf, sizeof(buf));
+	ls_frame_init(&tx);
 	ls_frame_set_type(&tx, LS_TYPE_DATA);
 	ls_frame_set_src(&tx, 0x0003);
 	ls_frame_set_dst(&tx, LS_COORD_ADDR);
 	ls_frame_set_fcnt(&tx, 99);
 	ls_frame_set_flags(&tx, LS_FLAG_ACK_REQ);
-	ls_frame_set_payload(&tx, payload_in);
+	ls_frame_set_payload(&tx, payload_in, 8);
 	ls_frame_set_mic(&tx, mic_in);
 
-	/* Simulate receive: wrap same raw buffer */
-	ls_frame_init(&rx, 8, buf, sizeof(buf));
+	/* Simulate receive: copy wire bytes into a fresh frame */
+	ls_frame_init(&rx);
+	rx.payload_len = 8;
+	memcpy(rx.buf, tx.buf, LS_FRAME_SIZE(8));
 
 	zassert_equal(ls_frame_get_type(&rx),  LS_TYPE_DATA);
 	zassert_equal(ls_frame_get_src(&rx),   0x0003);

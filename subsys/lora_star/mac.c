@@ -73,18 +73,14 @@ static void mac_recv_cb(const struct device *dev, uint8_t *data, uint16_t size,
 	ARG_UNUSED(dev);
 	ARG_UNUSED(snr);
 
-	if (!data || size < LS_OVERHEAD_SIZE) {
+	if (!data || size < LS_OVERHEAD_SIZE || size > LS_MAX_FRAME_SIZE) {
 		return;
 	}
 
-	ret = ls_frame_alloc_buf(&ev.rx, size - LS_OVERHEAD_SIZE);
-	if (ret) {
-		LOG_WRN("Failed to allocate frame buffer");
-		return;
-	}
-
-	ev.type   = LS_EVENT_RX;
+	ls_frame_init(&ev.rx);
+	ev.type = LS_EVENT_RX;
 	ev.rx.rssi = (int8_t)rssi;
+	ev.rx.payload_len = size - LS_OVERHEAD_SIZE;
 	memcpy(ev.rx.buf, data, size);
 
 	type = ls_frame_get_type(&ev.rx);
@@ -93,20 +89,17 @@ static void mac_recv_cb(const struct device *dev, uint8_t *data, uint16_t size,
 		ret = ls_frame_check_signature(&ev.rx, ctx->network_key);
 		if (ret) {
 			LOG_WRN("MIC check failed, dropping frame");
-			ls_frame_free_buf(&ev.rx);
 			return;
 		}
 		ret = ls_frame_decrypt(&ev.rx, ctx->network_key);
 		if (ret) {
 			LOG_WRN("Decryption failed, dropping frame");
-			ls_frame_free_buf(&ev.rx);
 			return;
 		}
 	}
 
 	if (k_msgq_put(ctx->_msgq, &ev, K_NO_WAIT) < 0) {
 		LOG_WRN("RX queue full, frame dropped");
-		ls_frame_free_buf(&ev.rx);
 	}
 }
 

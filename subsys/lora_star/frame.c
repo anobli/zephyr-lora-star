@@ -14,37 +14,9 @@ size_t ls_frame_size(size_t payload_len)
 	return LS_FRAME_SIZE(payload_len);
 }
 
-int ls_frame_init(struct ls_frame *frame, size_t payload_len, uint8_t *buf, size_t buf_size)
+void ls_frame_init(struct ls_frame *frame)
 {
-	if (buf_size < ls_frame_size(payload_len)) {
-		return -ENOMEM;
-	}
-
-	frame->buf = buf;
-	frame->buf_size = buf_size;
-	frame->payload_len = payload_len;
-
-	return 0;
-}
-
-int ls_frame_alloc_buf(struct ls_frame *frame, size_t payload_len)
-{
-	size_t sz = ls_frame_size(payload_len);
-
-	frame->buf = k_malloc(sz);
-	if (!frame->buf) {
-		return -ENOMEM;
-	}
-
-	frame->buf_size    = sz;
-	frame->payload_len = payload_len;
-
-	return 0;
-}
-
-void ls_frame_free_buf(struct ls_frame *frame)
-{
-	k_free(frame->buf);
+	frame->payload_len = 0;
 }
 
 static struct ls_frame_hdr *frame_get_hdr(struct ls_frame *frame)
@@ -122,11 +94,17 @@ uint8_t ls_frame_get_flags(struct ls_frame *frame)
 	return hdr->flags;
 }
 
-void ls_frame_set_payload(struct ls_frame *frame, const uint8_t *payload)
+int ls_frame_set_payload(struct ls_frame *frame, const uint8_t *payload, size_t len)
 {
 	struct ls_frame_hdr *hdr = frame_get_hdr(frame);
 
-	memcpy(hdr + 1, payload, frame->payload_len);
+	if (len > LS_MAX_PAYLOAD_SIZE) {
+		return -EINVAL;
+	}
+
+	frame->payload_len = len;
+	memcpy(hdr + 1, payload, len);
+	return 0;
 }
 
 void ls_frame_get_payload(struct ls_frame *frame, uint8_t **payload, size_t *payload_len)

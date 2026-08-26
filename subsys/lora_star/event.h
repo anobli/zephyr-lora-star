@@ -42,8 +42,7 @@ enum ls_event_type {
 struct ls_event {
 	enum ls_event_type type;
 	union {
-		/** LS_EVENT_RX: received frame.  The heap-allocated @c buf is
-		 *  owned by the event; the thread must call ls_frame_free_buf(). */
+		/** LS_EVENT_RX: received frame. */
 		struct ls_frame rx;
 
 		/** LS_EVENT_TX_DATA: build and transmit a DATA frame. */

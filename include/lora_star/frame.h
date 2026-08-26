@@ -12,10 +12,9 @@
  *
  *   TYPE(1B) | SRC(2B) | DST(2B) | FCNT(4B) | FLAGS(1B) | PAYLOAD(0-114B) | MIC(4B)
  *
- * Callers allocate a buffer (or use ls_frame_alloc()), initialise it with
- * ls_frame_init(), then use the typed accessors to read or write individual
- * fields.  The MIC must be computed over the *encrypted* payload and written
- * last (encrypt-then-MAC).
+ * Callers initialise a frame with ls_frame_init(), then use the typed
+ * accessors to read or write individual fields.  The MIC must be computed
+ * over the *encrypted* payload and written last (encrypt-then-MAC).
  */
 
 #ifndef LORA_STAR_LS_FRAME_H
@@ -68,13 +67,12 @@ struct ls_frame_hdr {
 	uint8_t  flags; /**< Flag bitmask (combination of LS_FLAG_*) */
 } __packed;
 
-/** Frame handle that pairs a raw byte buffer with its size. */
+/** Frame with embedded storage for the raw on-wire bytes. */
 struct ls_frame {
-	uint8_t *buf;         /**< Pointer to the raw frame buffer */
-	size_t   buf_size;    /**< Total size of @p buf in bytes */
-	size_t   payload_len; /**< Application payload length in bytes */
+	uint8_t buf[LS_MAX_FRAME_SIZE]; /**< Raw frame buffer */
+	size_t  payload_len;            /**< Application payload length in bytes */
 	/** RSSI of the received frame in dBm (negative). */
-	int8_t   rssi;
+	int8_t  rssi;
 };
 
 /**
@@ -88,37 +86,13 @@ struct ls_frame {
 size_t ls_frame_size(size_t payload_len);
 
 /**
- * @brief Initialise a frame with an existing buffer.
+ * @brief Initialise a frame.
  *
- * Assigns @p buf to the frame so that the typed accessors can be used.
- * The buffer must be at least ls_frame_size(payload_len) bytes.
- * @param frame    Pointer to the frame to initialise.
- * @param payload_len Length of the application payload in bytes.
- * @param buf      Buffer to use for this frame.
- * @param buf_size Size of @p buf in bytes.
- * @return 0 or -ENOMEM if buffer is too small.
+ * Resets @p payload_len to zero.  The embedded buffer is ready for use
+ * immediately via the typed accessors.
+ * @param frame Pointer to the frame to initialise.
  */
-int ls_frame_init(struct ls_frame *frame, size_t payload_len, uint8_t *buf, size_t buf_size);
-
-/**
- * @brief Allocate and initialise a frame on the heap.
- *
- * Allocates a frame struct and a backing buffer large enough to hold a
- * payload of @p payload_len bytes, including the fixed header and MIC.
- * The frame must be released with ls_frame_free() when no longer needed.
- * @param payload_len Length of the application payload in bytes.
- * @return Pointer to the allocated frame, or NULL on allocation failure.
- */
-int ls_frame_alloc_buf(struct ls_frame *frame, size_t payload_len);
-
-/**
- * @brief Free a frame allocated by ls_frame_alloc().
- *
- * Releases the backing buffer and the frame struct.  Passing NULL is safe
- * and has no effect.
- * @param frame Pointer to the frame to free.
- */
-void ls_frame_free_buf(struct ls_frame *frame);
+void ls_frame_init(struct ls_frame *frame);
 
 /**
  * @brief Set the frame type.
@@ -209,22 +183,24 @@ void ls_frame_set_flags(struct ls_frame *frame, uint8_t flags);
 uint8_t ls_frame_get_flags(struct ls_frame *frame);
 
 /**
- * @brief Write the payload into the frame buffer.
+ * @brief Write the payload into the frame buffer and record its length.
  *
- * Copies @c frame->payload_len bytes from @p payload into the payload region
- * of the frame.  The length is fixed at initialisation time; pass a buffer of
- * at least that size.
+ * Copies @p len bytes from @p payload into the payload region of the frame
+ * and sets @c frame->payload_len.  For zero-payload frames (e.g. ACK) simply
+ * omit this call; @c payload_len remains 0 after ls_frame_init().
  * @param frame   Pointer to the frame.
- * @param payload Pointer to the payload data to copy (at least @c frame->payload_len bytes).
+ * @param payload Pointer to the payload data to copy (at least @p len bytes).
+ * @param len     Payload length in bytes.
+ * @return 0 on success, -EINVAL if @p len exceeds @ref LS_MAX_PAYLOAD_SIZE.
  */
-void ls_frame_set_payload(struct ls_frame *frame, const uint8_t *payload);
+int ls_frame_set_payload(struct ls_frame *frame, const uint8_t *payload, size_t len);
 
 /**
  * @brief Get a pointer to the payload region and its length.
  *
  * Sets @p *payload to the start of the payload within the frame buffer and
- * @p *payload_len to @c frame->payload_len (as recorded at initialisation time).
- * The returned pointer is valid for the lifetime of the frame buffer.
+ * @p *payload_len to @c frame->payload_len.  The returned pointer is valid
+ * for the lifetime of the frame.
  * @param frame       Pointer to the frame.
  * @param payload     Output: set to the start of the payload in the buffer.
  * @param payload_len Output: set to the payload length in bytes.

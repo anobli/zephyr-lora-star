@@ -320,19 +320,18 @@ static void handle_tx_data(struct ls_ctx *ctx, struct ls_pending *ps,
 	struct ls_frame frame;
 	int ret;
 
-	ret = ls_frame_alloc_buf(&frame, ev->tx_data.payload_len);
-	if (ret < 0) {
-		if (ev->tx_data.done_cb) {
-			ev->tx_data.done_cb(ret, ev->tx_data.user_data);
-		}
-		return;
-	}
-
+	ls_frame_init(&frame);
 	ls_frame_set_type(&frame, LS_TYPE_DATA);
 	ls_frame_set_dst(&frame, ev->tx_data.dst);
 	ls_frame_set_flags(&frame, ev->tx_data.flags);
 	if (ev->tx_data.payload_len > 0) {
-		ls_frame_set_payload(&frame, ev->tx_data.payload);
+		ret = ls_frame_set_payload(&frame, ev->tx_data.payload, ev->tx_data.payload_len);
+		if (ret < 0) {
+			if (ev->tx_data.done_cb) {
+				ev->tx_data.done_cb(ret, ev->tx_data.user_data);
+			}
+			return;
+		}
 	}
 
 	if (!ctx->always_on_rx) {
@@ -340,7 +339,6 @@ static void handle_tx_data(struct ls_ctx *ctx, struct ls_pending *ps,
 	}
 
 	ret = ls_mac_send(ctx, &frame);
-	ls_frame_free_buf(&frame);
 
 	if (ret < 0 || !ev->tx_data.want_ack) {
 		if (ev->tx_data.done_cb) {
@@ -368,7 +366,6 @@ static void handle_tx_data(struct ls_ctx *ctx, struct ls_pending *ps,
 static void handle_tx_raw(struct ls_ctx *ctx, struct ls_pending *ps,
 			  const struct ls_event *ev)
 {
-	uint8_t frame_buf[LS_MAX_FRAME_SIZE];
 	struct ls_frame frame;
 	int ret;
 
@@ -380,15 +377,9 @@ static void handle_tx_raw(struct ls_ctx *ctx, struct ls_pending *ps,
 		return;
 	}
 
-	memcpy(frame_buf, ev->tx_raw.buf, ev->tx_raw.buf_len);
-	ret = ls_frame_init(&frame, ev->tx_raw.buf_len - LS_OVERHEAD_SIZE,
-			    frame_buf, ev->tx_raw.buf_len);
-	if (ret < 0) {
-		if (ev->tx_raw.done_cb) {
-			ev->tx_raw.done_cb(ret, ev->tx_raw.user_data);
-		}
-		return;
-	}
+	ls_frame_init(&frame);
+	frame.payload_len = ev->tx_raw.buf_len - LS_OVERHEAD_SIZE;
+	memcpy(frame.buf, ev->tx_raw.buf, ev->tx_raw.buf_len);
 
 	if (!ctx->always_on_rx) {
 		ls_mac_rx_stop(ctx);
@@ -437,7 +428,6 @@ static void handle_rx(struct ls_ctx *ctx, struct ls_pending *ps,
 	}
 
 	consumed = ls_dispatch_frame(ctx, frame);
-	ls_frame_free_buf(frame);
 
 	if (!matched) {
 		return;
@@ -542,20 +532,13 @@ static void ls_thread_fn(void *p1, void *p2, void *p3)
 int ls_send_ack(struct ls_ctx *ctx, uint16_t dst)
 {
 	struct ls_frame frame;
-	int ret;
 
-	ret = ls_frame_alloc_buf(&frame, 0);
-	if (ret < 0) {
-		return ret;
-	}
-
+	ls_frame_init(&frame);
 	ls_frame_set_type(&frame, LS_TYPE_ACK);
 	ls_frame_set_dst(&frame, dst);
 	ls_frame_set_flags(&frame, 0);
 
-	ret = ls_mac_send(ctx, &frame);
-	ls_frame_free_buf(&frame);
-	return ret;
+	return ls_mac_send(ctx, &frame);
 }
 
 /*
