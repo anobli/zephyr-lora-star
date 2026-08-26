@@ -295,18 +295,12 @@ static void pending_clear(struct ls_ctx *ctx, struct ls_pending *ps, int ret)
 	ls_send_cb done_cb;
 	void *user_data;
 
+	done_cb   = ps->saved_tx.tx.done_cb;
+	user_data = ps->saved_tx.tx.user_data;
 	ps->active = false;
 
 	if (!ctx->always_on_rx) {
 		ls_mac_rx_stop(ctx);
-	}
-
-	if (ps->saved_tx.type == LS_EVENT_TX_DATA) {
-		done_cb   = ps->saved_tx.tx_data.done_cb;
-		user_data = ps->saved_tx.tx_data.user_data;
-	} else {
-		done_cb   = ps->saved_tx.tx_raw.done_cb;
-		user_data = ps->saved_tx.tx_raw.user_data;
 	}
 
 	if (done_cb) {
@@ -314,82 +308,40 @@ static void pending_clear(struct ls_ctx *ctx, struct ls_pending *ps, int ret)
 	}
 }
 
-static void handle_tx_data(struct ls_ctx *ctx, struct ls_pending *ps,
-			   const struct ls_event *ev)
+static void handle_tx(struct ls_ctx *ctx, struct ls_pending *ps,
+		      const struct ls_event *ev)
 {
 	struct ls_frame frame;
+	const uint8_t *key;
 	int ret;
 
 	ls_frame_init(&frame);
-	ls_frame_set_type(&frame, LS_TYPE_DATA);
-	ls_frame_set_dst(&frame, ev->tx_data.dst);
-	ls_frame_set_flags(&frame, ev->tx_data.flags);
-	if (ev->tx_data.payload_len > 0) {
-		ret = ls_frame_set_payload(&frame, ev->tx_data.payload, ev->tx_data.payload_len);
+	ls_frame_set_type(&frame, ev->tx.frame_type);
+	ls_frame_set_src(&frame, ev->tx.src);
+	ls_frame_set_dst(&frame, ev->tx.dst);
+	ls_frame_set_flags(&frame, ev->tx.flags);
+
+	if (ev->tx.payload_len > 0) {
+		ret = ls_frame_set_payload(&frame, ev->tx.payload, ev->tx.payload_len);
 		if (ret < 0) {
-			if (ev->tx_data.done_cb) {
-				ev->tx_data.done_cb(ret, ev->tx_data.user_data);
+			if (ev->tx.done_cb) {
+				ev->tx.done_cb(ret, ev->tx.user_data);
 			}
 			return;
 		}
 	}
 
-	if (!ctx->always_on_rx) {
-		ls_mac_rx_stop(ctx);
-	}
-
-	ret = ls_mac_send(ctx, &frame);
-
-	if (ret < 0 || !ev->tx_data.want_ack) {
-		if (ev->tx_data.done_cb) {
-			ev->tx_data.done_cb(ret, ev->tx_data.user_data);
-		}
-		return;
-	}
-
-	if (!ctx->always_on_rx) {
-		ls_mac_recv(ctx);
-	}
-
-	ps->active     = true;
-	ps->resp_type  = LS_TYPE_ACK;
-	ps->resp_src   = ev->tx_data.dst;
-	ps->retries    = CONFIG_LORA_STAR_TX_MAX_RETRIES;
-	ps->timeout_ms = ls_mac_airtime_ms(ctx, LS_FRAME_SIZE(ev->tx_data.payload_len))
-			 + ls_mac_airtime_ms(ctx, LS_FRAME_SIZE(0))
-			 + CONFIG_LORA_STAR_ACK_GUARD_MS + LS_DATA_ACK_PROC_GUARD_MS;
-	ps->saved_tx   = *ev;
-
-	arm_timer(ps);
-}
-
-static void handle_tx_raw(struct ls_ctx *ctx, struct ls_pending *ps,
-			  const struct ls_event *ev)
-{
-	struct ls_frame frame;
-	int ret;
-
-	if (ev->tx_raw.buf_len > LS_MAX_FRAME_SIZE ||
-	    ev->tx_raw.buf_len < LS_OVERHEAD_SIZE) {
-		if (ev->tx_raw.done_cb) {
-			ev->tx_raw.done_cb(-EINVAL, ev->tx_raw.user_data);
-		}
-		return;
-	}
-
-	ls_frame_init(&frame);
-	frame.payload_len = ev->tx_raw.buf_len - LS_OVERHEAD_SIZE;
-	memcpy(frame.buf, ev->tx_raw.buf, ev->tx_raw.buf_len);
+	key = ev->tx.key;
 
 	if (!ctx->always_on_rx) {
 		ls_mac_rx_stop(ctx);
 	}
 
-	ret = ls_mac_send(ctx, &frame);
+	ret = ls_mac_send(ctx, &frame, key);
 
-	if (ret < 0 || !ev->tx_raw.want_resp) {
-		if (ev->tx_raw.done_cb) {
-			ev->tx_raw.done_cb(ret, ev->tx_raw.user_data);
+	if (ret < 0 || !ev->tx.want_resp) {
+		if (ev->tx.done_cb) {
+			ev->tx.done_cb(ret, ev->tx.user_data);
 		}
 		return;
 	}
@@ -399,13 +351,14 @@ static void handle_tx_raw(struct ls_ctx *ctx, struct ls_pending *ps,
 	}
 
 	ps->active    = true;
-	ps->resp_type = ev->tx_raw.resp_type;
-	ps->resp_src  = ev->tx_raw.resp_src;
+	ps->resp_type = ev->tx.resp_type;
+	ps->resp_src  = ev->tx.resp_src;
 	ps->retries   = CONFIG_LORA_STAR_TX_MAX_RETRIES;
-	ps->timeout_ms = ev->tx_raw.timeout_ms
-			 ? ev->tx_raw.timeout_ms
-			 : (ls_mac_airtime_ms(ctx, LS_MAX_FRAME_SIZE)
-			    + CONFIG_LORA_STAR_ACK_GUARD_MS);
+	ps->timeout_ms = ev->tx.timeout_ms
+			 ? ev->tx.timeout_ms
+			 : (ls_mac_airtime_ms(ctx, LS_FRAME_SIZE(ev->tx.payload_len))
+			    + ls_mac_airtime_ms(ctx, LS_FRAME_SIZE(0))
+			    + CONFIG_LORA_STAR_ACK_GUARD_MS + LS_DATA_ACK_PROC_GUARD_MS);
 	ps->saved_tx  = *ev;
 
 	arm_timer(ps);
@@ -414,10 +367,11 @@ static void handle_tx_raw(struct ls_ctx *ctx, struct ls_pending *ps,
 static void handle_rx(struct ls_ctx *ctx, struct ls_pending *ps,
 		      struct ls_event *ev)
 {
-	struct ls_frame *frame = &ev->rx;
-	uint8_t frame_type     = ls_frame_get_type(frame);
-	uint16_t frame_src     = ls_frame_get_src(frame);
-	bool matched           = false;
+	struct ls_frame *frame   = &ev->rx;
+	uint8_t frame_type       = ls_frame_get_type(frame);
+	uint16_t frame_src       = ls_frame_get_src(frame);
+	uint8_t saved_frame_type = ps->saved_tx.tx.frame_type;
+	bool matched             = false;
 	bool consumed;
 
 	if (ps->active &&
@@ -435,11 +389,11 @@ static void handle_rx(struct ls_ctx *ctx, struct ls_pending *ps,
 
 	/*
 	 * For DATA/ACK responses the MAC already verified the MIC, so a match
-	 * is always valid.  For raw responses (e.g. JOIN_ACCEPT) the dispatch
-	 * handler verifies the pairing MIC; if it returns false (not consumed)
-	 * the frame was rejected and we keep waiting.
+	 * is always valid.  For JOIN_REQ responses (JOIN_ACCEPT), the dispatch
+	 * handler verifies the pairing MIC; if it returns 0 (not consumed) the
+	 * frame was rejected and we keep waiting.
 	 */
-	if (ps->saved_tx.type == LS_EVENT_TX_DATA || consumed) {
+	if (saved_frame_type == LS_TYPE_DATA || saved_frame_type == LS_TYPE_ACK || consumed) {
 		pending_clear(ctx, ps, 0);
 	} else {
 		/* Not consumed — MIC mismatch or wrong network; keep waiting. */
@@ -478,11 +432,7 @@ static void handle_retry(struct ls_ctx *ctx, struct ls_pending *ps)
 {
 	int remaining = ps->retries;
 
-	if (ps->saved_tx.type == LS_EVENT_TX_DATA) {
-		handle_tx_data(ctx, ps, &ps->saved_tx);
-	} else {
-		handle_tx_raw(ctx, ps, &ps->saved_tx);
-	}
+	handle_tx(ctx, ps, &ps->saved_tx);
 	if (ps->active) {
 		ps->retries = remaining;
 	}
@@ -506,11 +456,8 @@ static void ls_thread_fn(void *p1, void *p2, void *p3)
 		k_msgq_get(&ls_msgq, &ev, K_FOREVER);
 
 		switch (ev.type) {
-		case LS_EVENT_TX_DATA:
-			handle_tx_data(ctx, &pending, &ev);
-			break;
-		case LS_EVENT_TX_RAW:
-			handle_tx_raw(ctx, &pending, &ev);
+		case LS_EVENT_TX:
+			handle_tx(ctx, &pending, &ev);
 			break;
 		case LS_EVENT_RX:
 			handle_rx(ctx, &pending, &ev);
@@ -535,10 +482,11 @@ int ls_send_ack(struct ls_ctx *ctx, uint16_t dst)
 
 	ls_frame_init(&frame);
 	ls_frame_set_type(&frame, LS_TYPE_ACK);
+	ls_frame_set_src(&frame, ctx->own_addr);
 	ls_frame_set_dst(&frame, dst);
 	ls_frame_set_flags(&frame, 0);
 
-	return ls_mac_send(ctx, &frame);
+	return ls_mac_send(ctx, &frame, NULL);
 }
 
 /*
@@ -583,27 +531,38 @@ int ls_send_data_ack(struct ls_ctx *ctx, uint16_t dst, const uint8_t *data, size
 	return sync_send(ls_send_data_ack_async(ctx, dst, data, len, sync_done_cb, &w), &w);
 }
 
-static int enqueue_tx_data(struct ls_ctx *ctx,
-			   uint16_t dst, const uint8_t *data, size_t len,
-			   uint8_t flags, bool want_ack,
-			   ls_send_cb done_cb, void *user_data)
+int ls_send_async(struct ls_ctx *ctx,
+		  uint8_t type, uint16_t src, uint16_t dst, uint8_t flags,
+		  const uint8_t *payload, size_t payload_len,
+		  const uint8_t *key,
+		  bool want_resp, uint8_t resp_type, uint16_t resp_src,
+		  uint32_t timeout_ms,
+		  ls_send_cb done_cb, void *user_data)
 {
 	struct ls_event ev;
 
-	if (!ctx || len > LS_MAX_PAYLOAD_SIZE || (len > 0 && !data)) {
+	if (!ctx || payload_len > LS_MAX_PAYLOAD_SIZE ||
+	    (payload_len > 0 && !payload)) {
 		return -EINVAL;
 	}
 
-	ev.type                = LS_EVENT_TX_DATA;
-	ev.tx_data.dst         = dst;
-	ev.tx_data.payload_len = len;
-	ev.tx_data.flags       = flags;
-	ev.tx_data.want_ack    = want_ack;
-	ev.tx_data.done_cb     = done_cb;
-	ev.tx_data.user_data   = user_data;
-	if (len > 0) {
-		memcpy(ev.tx_data.payload, data, len);
+	ev.type           = LS_EVENT_TX;
+	ev.tx.frame_type  = type;
+	ev.tx.src         = src;
+	ev.tx.dst         = dst;
+	ev.tx.flags       = flags;
+	ev.tx.payload_len = payload_len;
+	ev.tx.want_resp   = want_resp;
+	ev.tx.resp_type   = resp_type;
+	ev.tx.resp_src    = resp_src;
+	ev.tx.timeout_ms  = timeout_ms;
+	ev.tx.done_cb     = done_cb;
+	ev.tx.user_data   = user_data;
+
+	if (payload_len > 0) {
+		memcpy(ev.tx.payload, payload, payload_len);
 	}
+	memcpy(ev.tx.key, key ? key : ctx->network_key, LS_NETWORK_KEY_SIZE);
 
 	return k_msgq_put(&ls_msgq, &ev, K_NO_WAIT);
 }
@@ -612,38 +571,18 @@ int ls_send_data_async(struct ls_ctx *ctx,
 		       uint16_t dst, const uint8_t *data, size_t len,
 		       ls_send_cb done_cb, void *user_data)
 {
-	return enqueue_tx_data(ctx, dst, data, len, 0, false, done_cb, user_data);
+	return ls_send_async(ctx, LS_TYPE_DATA, ctx->own_addr, dst, 0,
+			     data, len, NULL,
+			     false, 0, LS_BCAST_ADDR, 0,
+			     done_cb, user_data);
 }
 
 int ls_send_data_ack_async(struct ls_ctx *ctx,
 			   uint16_t dst, const uint8_t *data, size_t len,
 			   ls_send_cb done_cb, void *user_data)
 {
-	return enqueue_tx_data(ctx, dst, data, len, LS_FLAG_ACK_REQ, true,
-			       done_cb, user_data);
-}
-
-int ls_send_raw_async(struct ls_ctx *ctx,
-		      const uint8_t *buf, size_t len,
-		      bool want_resp, uint8_t resp_type, uint16_t resp_src,
-		      uint32_t timeout_ms,
-		      ls_send_cb done_cb, void *user_data)
-{
-	struct ls_event ev;
-
-	if (!ctx || !buf || len == 0 || len > LS_MAX_FRAME_SIZE) {
-		return -EINVAL;
-	}
-
-	ev.type             = LS_EVENT_TX_RAW;
-	ev.tx_raw.buf_len   = len;
-	ev.tx_raw.want_resp = want_resp;
-	ev.tx_raw.resp_type = resp_type;
-	ev.tx_raw.resp_src  = resp_src;
-	ev.tx_raw.timeout_ms = timeout_ms;
-	ev.tx_raw.done_cb   = done_cb;
-	ev.tx_raw.user_data = user_data;
-	memcpy(ev.tx_raw.buf, buf, len);
-
-	return k_msgq_put(&ls_msgq, &ev, K_NO_WAIT);
+	return ls_send_async(ctx, LS_TYPE_DATA, ctx->own_addr, dst, LS_FLAG_ACK_REQ,
+			     data, len, NULL,
+			     true, LS_TYPE_ACK, dst, 0,
+			     done_cb, user_data);
 }

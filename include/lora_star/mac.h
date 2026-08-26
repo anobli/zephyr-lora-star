@@ -13,17 +13,29 @@ int ls_mac_init(struct ls_ctx *ctx);
 /**
  * @brief Transmit a frame.
  *
- * Stamps @p frame with SRC from @p ctx->own_addr and FCNT from @p ctx->fcnt
- * (which is incremented after stamping).  DATA and ACK frames are encrypted
- * then signed with @p ctx->session_key before transmission.  JOIN_REQ and
- * JOIN_ACCEPT frames are transmitted as-is.  When @p ctx->always_on_rx is
- * true, async RX is stopped before transmission and resumed immediately after.
+ * Behaviour depends on frame type:
+ *
+ * - DATA / ACK: stamps FCNT from @p ctx->fcnt (post-increment), encrypts the
+ *   payload with AES-128-CTR, then authenticates the frame with AES-CMAC.
+ *   Uses @p key when non-NULL, otherwise falls back to @p ctx->network_key.
+ *
+ * - JOIN_ACCEPT: stamps FCNT from @p ctx->fcnt (post-increment), then signs
+ *   the frame with AES-CMAC using @p key.  No payload encryption.
+ *
+ * - JOIN_REQ: leaves FCNT unchanged (caller sets it to 0), then signs the
+ *   frame with AES-CMAC using @p key.  No payload encryption.
+ *
+ * The SRC field is never modified; the caller must set it before this call.
+ * When @p ctx->always_on_rx is true, async RX is stopped before transmission
+ * and resumed immediately after.
  *
  * @param ctx   LoRa Star context.
- * @param frame Frame to transmit.  Header fields and payload are modified in place.
+ * @param frame Frame to transmit.  Modified in place (FCNT, crypto).
+ * @param key   Signing/encryption key.  NULL uses @p ctx->network_key (valid
+ *              only for DATA and ACK).  Must be non-NULL for JOIN frames.
  * @return 0 on success, negative errno on failure.
  */
-int ls_mac_send(struct ls_ctx *ctx, struct ls_frame *frame);
+int ls_mac_send(struct ls_ctx *ctx, struct ls_frame *frame, const uint8_t *key);
 
 /**
  * @brief Start asynchronous frame reception.

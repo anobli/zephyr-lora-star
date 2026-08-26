@@ -302,11 +302,62 @@ int ls_send_data_ack(struct ls_ctx *ctx, uint16_t dst, const uint8_t *data, size
 typedef void (*ls_send_cb)(int ret, void *user_data);
 
 /**
+ * @brief Low-level async frame send.
+ *
+ * Builds a frame with the given parameters, enqueues it for the LoRa Star
+ * thread, and invokes @p done_cb when the send has completed (or failed).
+ * Safe to call from any context including ISRs and the system workqueue.
+ *
+ * Frame type determines MAC behaviour:
+ *
+ * - DATA / ACK: stamps FCNT from @p ctx->fcnt (post-increment), AES-128-CTR
+ *   encrypts the payload, then AES-CMAC signs the frame.  Pass NULL for @p key
+ *   to use @p ctx->network_key.
+ *
+ * - JOIN_ACCEPT: stamps FCNT from @p ctx->fcnt (post-increment), then
+ *   AES-CMAC signs the frame with @p key.  No encryption.
+ *
+ * - JOIN_REQ: leaves FCNT at 0 (caller convention), then AES-CMAC signs
+ *   the frame with @p key.  No encryption.
+ *
+ * @p src, @p dst, and @p flags are written into the frame header verbatim.
+ * Pass @p ctx->own_addr as @p src for DATA and ACK frames.
+ *
+ * @param ctx         LoRa Star context.
+ * @param type        Frame type (LS_TYPE_DATA, LS_TYPE_ACK, etc.).
+ * @param src         Source address to write into the frame header.
+ * @param dst         Destination address.
+ * @param flags       Frame flags byte (combination of LS_FLAG_* constants).
+ * @param payload     Payload buffer, or NULL when @p payload_len is 0.
+ * @param payload_len Payload length in bytes (0 to @ref LS_MAX_PAYLOAD_SIZE).
+ * @param key         Signing/encryption key.  NULL falls back to
+ *                    @p ctx->network_key (valid only for DATA and ACK);
+ *                    must be non-NULL for JOIN frames.
+ * @param want_resp   When true, arm the retry timer and wait for a response.
+ * @param resp_type   Expected response frame type; ignored when !want_resp.
+ * @param resp_src    Expected response source address (@ref LS_BCAST_ADDR matches any).
+ * @param timeout_ms  Response window in ms; 0 auto-computes from airtime.
+ * @param done_cb     Invoked on completion: 0 on success, -ETIMEDOUT when all
+ *                    retries are exhausted, negative errno on hard failure.
+ *                    May be NULL.
+ * @param user_data   Forwarded to @p done_cb.
+ * @return 0 if the event was enqueued, -ENOMEM if the TX queue is full,
+ *         -EINVAL on invalid arguments.
+ */
+int ls_send_async(struct ls_ctx *ctx,
+		  uint8_t type, uint16_t src, uint16_t dst, uint8_t flags,
+		  const uint8_t *payload, size_t payload_len,
+		  const uint8_t *key,
+		  bool want_resp, uint8_t resp_type, uint16_t resp_src,
+		  uint32_t timeout_ms,
+		  ls_send_cb done_cb, void *user_data);
+
+/**
  * @brief Send a DATA frame without waiting for an acknowledgement (async).
  *
- * Copies @p data into an internal TX queue and returns immediately.
- * @p done_cb is invoked from the TX thread once the frame has been
- * transmitted (or on failure).
+ * Convenience wrapper around @ref ls_send_async().  Copies @p data into the
+ * internal TX queue and returns immediately.  @p done_cb is invoked from the
+ * LoRa Star thread once the frame has been transmitted (or on failure).
  *
  * Safe to call from any context including ISRs, GPIO callbacks, and the
  * system workqueue.
@@ -327,9 +378,10 @@ int ls_send_data_async(struct ls_ctx *ctx,
 /**
  * @brief Send a DATA frame and wait for an ACK (async).
  *
- * Copies @p data into an internal TX queue and returns immediately.
- * @p done_cb is invoked from the TX thread with the result (0 on ACK,
- * -ETIMEDOUT after all retries, negative errno on other failures).
+ * Convenience wrapper around @ref ls_send_async().  Copies @p data into the
+ * internal TX queue and returns immediately.  @p done_cb is invoked from the
+ * LoRa Star thread with the result (0 on ACK received, -ETIMEDOUT after all
+ * retries, negative errno on other failures).
  *
  * Safe to call from any context including ISRs, GPIO callbacks, and the
  * system workqueue.

@@ -14,20 +14,14 @@
  *
  * All protocol events flow through the same queue.  LS_EVENT_TIMEOUT is
  * posted by the ACK timer on response-window expiry; LS_EVENT_RETRY is posted
- * by the backoff timer when it is time to re-send.  The other three originate
+ * by the backoff timer when it is time to re-send.  The other two originate
  * from the application or the MAC receive path.
  */
 enum ls_event_type {
 	/** Frame received from the radio and verified by the MAC layer. */
 	LS_EVENT_RX,
-	/** Request to transmit a DATA frame (payload copied into the event). */
-	LS_EVENT_TX_DATA,
-	/**
-	 * Request to transmit a pre-built, pre-signed frame verbatim.
-	 * Used by the pairing layer for JOIN_REQ / JOIN_ACCEPT frames that
-	 * require pairing-specific crypto the MAC layer does not know about.
-	 */
-	LS_EVENT_TX_RAW,
+	/** Request to transmit a frame (payload + addressing copied into the event). */
+	LS_EVENT_TX,
 	/** ACK timer expired; decrement retry count or report timeout. */
 	LS_EVENT_TIMEOUT,
 	/** Backoff timer expired; re-transmit the saved frame. */
@@ -45,21 +39,22 @@ struct ls_event {
 		/** LS_EVENT_RX: received frame. */
 		struct ls_frame rx;
 
-		/** LS_EVENT_TX_DATA: build and transmit a DATA frame. */
+		/** LS_EVENT_TX: build and transmit a frame. */
 		struct {
-			uint8_t    payload[LS_MAX_PAYLOAD_SIZE];
-			size_t     payload_len;
+			/** Frame type (LS_TYPE_DATA, LS_TYPE_ACK, LS_TYPE_JOIN_REQ, etc.). */
+			uint8_t    frame_type;
+			/** Source address written verbatim into the frame header. */
+			uint16_t   src;
+			/** Destination address written verbatim into the frame header. */
 			uint16_t   dst;
+			/** Frame flags byte. */
 			uint8_t    flags;
-			bool       want_ack;
-			ls_send_cb done_cb;
-			void      *user_data;
-		} tx_data;
-
-		/** LS_EVENT_TX_RAW: transmit a pre-built frame verbatim. */
-		struct {
-			uint8_t    buf[LS_MAX_FRAME_SIZE];
-			size_t     buf_len;
+			/** Application payload bytes. */
+			uint8_t    payload[LS_MAX_PAYLOAD_SIZE];
+			/** Payload length in bytes. */
+			size_t     payload_len;
+			/** Signing/encryption key, pre-resolved at enqueue time. */
+			uint8_t    key[LS_NETWORK_KEY_SIZE];
 			/** When true, arm the retry timer and wait for a response. */
 			bool       want_resp;
 			/** Frame type of the expected response (LS_TYPE_*). */
@@ -76,37 +71,8 @@ struct ls_event {
 			uint32_t   timeout_ms;
 			ls_send_cb done_cb;
 			void      *user_data;
-		} tx_raw;
+		} tx;
 	};
 };
-
-/**
- * @brief Transmit a pre-built frame and optionally wait for a typed response.
- *
- * Copies @p len bytes from @p buf into a @ref LS_EVENT_TX_RAW event and
- * enqueues it for the LoRa Star thread.  If @p want_resp is true the thread
- * arms a retry timer and waits for a frame of @p resp_type from @p resp_src
- * before calling @p done_cb.  Retries up to
- * @c CONFIG_LORA_STAR_TX_MAX_RETRIES times on timeout.
- *
- * @note This is an internal API used by the pairing layer.
- *
- * @param ctx        LoRa Star context.
- * @param buf        Pre-built frame bytes.
- * @param len        Total frame length in bytes.
- * @param want_resp  Wait for a response frame after sending.
- * @param resp_type  Expected response frame type (ignored when !want_resp).
- * @param resp_src   Expected response source address (ignored when !want_resp).
- * @param timeout_ms Response window; 0 uses the default ACK timeout.
- * @param done_cb    Completion callback; 0 on response received, -ETIMEDOUT
- *                   if retries exhausted, negative errno on hard failure.
- * @param user_data  Forwarded to @p done_cb.
- * @return 0 on success, -ENOMEM if the queue is full, -EINVAL on bad args.
- */
-int ls_send_raw_async(struct ls_ctx *ctx,
-		      const uint8_t *buf, size_t len,
-		      bool want_resp, uint8_t resp_type, uint16_t resp_src,
-		      uint32_t timeout_ms,
-		      ls_send_cb done_cb, void *user_data);
 
 #endif /* LORA_STAR_EVENT_H */

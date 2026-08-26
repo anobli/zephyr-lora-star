@@ -17,8 +17,9 @@ int ls_mac_init(struct ls_ctx *ctx)
 	return ls_radio_init(ctx->radio_dev);
 }
 
-int ls_mac_send(struct ls_ctx *ctx, struct ls_frame *frame)
+int ls_mac_send(struct ls_ctx *ctx, struct ls_frame *frame, const uint8_t *key)
 {
+	const uint8_t *use_key;
 	uint8_t type;
 	int ret;
 
@@ -32,15 +33,28 @@ int ls_mac_send(struct ls_ctx *ctx, struct ls_frame *frame)
 
 	type = ls_frame_get_type(frame);
 
-	if (type == LS_TYPE_DATA || type == LS_TYPE_ACK) {
-		ls_frame_set_src(frame, ctx->own_addr);
+	if ((type == LS_TYPE_JOIN_REQ || type == LS_TYPE_JOIN_ACCEPT) && !key) {
+		return -EINVAL;
+	}
+
+	if (type == LS_TYPE_DATA || type == LS_TYPE_ACK || type == LS_TYPE_JOIN_ACCEPT) {
 		ls_frame_set_fcnt(frame, ctx->fcnt++);
-		ret = ls_frame_encrypt(frame, ctx->network_key);
+	}
+
+	if (type == LS_TYPE_DATA || type == LS_TYPE_ACK) {
+		use_key = key ? key : ctx->network_key;
+		ret = ls_frame_encrypt(frame, use_key);
 		if (ret) {
 			LOG_ERR("Failed to encrypt the frame");
 			return ret;
 		}
-		ret = ls_frame_sign(frame, ctx->network_key);
+		ret = ls_frame_sign(frame, use_key);
+		if (ret) {
+			LOG_ERR("Failed to sign the frame");
+			return ret;
+		}
+	} else if (key != NULL) {
+		ret = ls_frame_sign(frame, key);
 		if (ret) {
 			LOG_ERR("Failed to sign the frame");
 			return ret;
