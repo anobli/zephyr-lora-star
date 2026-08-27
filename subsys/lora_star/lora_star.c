@@ -311,33 +311,15 @@ static void pending_clear(struct ls_ctx *ctx, struct ls_pending *ps, int ret)
 static void handle_tx(struct ls_ctx *ctx, struct ls_pending *ps,
 		      const struct ls_event *ev)
 {
-	struct ls_frame frame;
-	const uint8_t *key;
+	/* Copy so ls_mac_send() can modify in place without corrupting saved_tx for retries. */
+	struct ls_frame frame = ev->tx.frame;
 	int ret;
-
-	ls_frame_init(&frame);
-	ls_frame_set_type(&frame, ev->tx.frame_type);
-	ls_frame_set_src(&frame, ev->tx.src);
-	ls_frame_set_dst(&frame, ev->tx.dst);
-	ls_frame_set_flags(&frame, ev->tx.flags);
-
-	if (ev->tx.payload_len > 0) {
-		ret = ls_frame_set_payload(&frame, ev->tx.payload, ev->tx.payload_len);
-		if (ret < 0) {
-			if (ev->tx.done_cb) {
-				ev->tx.done_cb(ret, ev->tx.user_data);
-			}
-			return;
-		}
-	}
-
-	key = ev->tx.key;
 
 	if (!ctx->always_on_rx) {
 		ls_mac_rx_stop(ctx);
 	}
 
-	ret = ls_mac_send(ctx, &frame, key);
+	ret = ls_mac_send(ctx, &frame, ev->tx.key);
 
 	if (ret < 0 || !ev->tx.want_resp) {
 		if (ev->tx.done_cb) {
@@ -356,10 +338,10 @@ static void handle_tx(struct ls_ctx *ctx, struct ls_pending *ps,
 	ps->retries   = CONFIG_LORA_STAR_TX_MAX_RETRIES;
 	ps->timeout_ms = ev->tx.timeout_ms
 			 ? ev->tx.timeout_ms
-			 : (ls_mac_airtime_ms(ctx, LS_FRAME_SIZE(ev->tx.payload_len))
+			 : (ls_mac_airtime_ms(ctx, LS_FRAME_SIZE(ev->tx.frame.payload_len))
 			    + ls_mac_airtime_ms(ctx, LS_FRAME_SIZE(0))
 			    + CONFIG_LORA_STAR_ACK_GUARD_MS + LS_DATA_ACK_PROC_GUARD_MS);
-	ps->saved_tx  = *ev;
+	ps->saved_tx = *ev;
 
 	arm_timer(ps);
 }
@@ -370,7 +352,7 @@ static void handle_rx(struct ls_ctx *ctx, struct ls_pending *ps,
 	struct ls_frame *frame   = &ev->rx;
 	uint8_t frame_type       = ls_frame_get_type(frame);
 	uint16_t frame_src       = ls_frame_get_src(frame);
-	uint8_t saved_frame_type = ps->saved_tx.tx.frame_type;
+	uint8_t saved_frame_type = ls_frame_get_type(&ps->saved_tx.tx.frame);
 	bool matched             = false;
 	bool consumed;
 
@@ -480,11 +462,7 @@ int ls_send_ack(struct ls_ctx *ctx, uint16_t dst)
 {
 	struct ls_frame frame;
 
-	ls_frame_init(&frame);
-	ls_frame_set_type(&frame, LS_TYPE_ACK);
-	ls_frame_set_src(&frame, ctx->own_addr);
-	ls_frame_set_dst(&frame, dst);
-	ls_frame_set_flags(&frame, 0);
+	ls_frame_build(&frame, LS_TYPE_ACK, ctx->own_addr, dst, 0);
 
 	return ls_mac_send(ctx, &frame, NULL);
 }
@@ -540,29 +518,28 @@ int ls_send_async(struct ls_ctx *ctx,
 		  ls_send_cb done_cb, void *user_data)
 {
 	struct ls_event ev;
+	int ret;
 
 	if (!ctx || payload_len > LS_MAX_PAYLOAD_SIZE ||
 	    (payload_len > 0 && !payload)) {
 		return -EINVAL;
 	}
 
-	ev.type           = LS_EVENT_TX;
-	ev.tx.frame_type  = type;
-	ev.tx.src         = src;
-	ev.tx.dst         = dst;
-	ev.tx.flags       = flags;
-	ev.tx.payload_len = payload_len;
-	ev.tx.want_resp   = want_resp;
-	ev.tx.resp_type   = resp_type;
-	ev.tx.resp_src    = resp_src;
-	ev.tx.timeout_ms  = timeout_ms;
-	ev.tx.done_cb     = done_cb;
-	ev.tx.user_data   = user_data;
-
+	ev.type = LS_EVENT_TX;
+	ls_frame_build(&ev.tx.frame, type, src, dst, flags);
 	if (payload_len > 0) {
-		memcpy(ev.tx.payload, payload, payload_len);
+		ret = ls_frame_set_payload(&ev.tx.frame, payload, payload_len);
+		if (ret < 0) {
+			return ret;
+		}
 	}
 	memcpy(ev.tx.key, key ? key : ctx->network_key, LS_NETWORK_KEY_SIZE);
+	ev.tx.want_resp  = want_resp;
+	ev.tx.resp_type  = resp_type;
+	ev.tx.resp_src   = resp_src;
+	ev.tx.timeout_ms = timeout_ms;
+	ev.tx.done_cb    = done_cb;
+	ev.tx.user_data  = user_data;
 
 	return k_msgq_put(&ls_msgq, &ev, K_NO_WAIT);
 }

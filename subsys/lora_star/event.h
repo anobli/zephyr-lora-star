@@ -20,7 +20,7 @@
 enum ls_event_type {
 	/** Frame received from the radio and verified by the MAC layer. */
 	LS_EVENT_RX,
-	/** Request to transmit a frame (payload + addressing copied into the event). */
+	/** Request to transmit a pre-built frame. */
 	LS_EVENT_TX,
 	/** ACK timer expired; decrement retry count or report timeout. */
 	LS_EVENT_TIMEOUT,
@@ -39,38 +39,28 @@ struct ls_event {
 		/** LS_EVENT_RX: received frame. */
 		struct ls_frame rx;
 
-		/** LS_EVENT_TX: build and transmit a frame. */
+		/** LS_EVENT_TX: transmit a frame. */
 		struct {
-			/** Frame type (LS_TYPE_DATA, LS_TYPE_ACK, LS_TYPE_JOIN_REQ, etc.). */
-			uint8_t    frame_type;
-			/** Source address written verbatim into the frame header. */
-			uint16_t   src;
-			/** Destination address written verbatim into the frame header. */
-			uint16_t   dst;
-			/** Frame flags byte. */
-			uint8_t    flags;
-			/** Application payload bytes. */
-			uint8_t    payload[LS_MAX_PAYLOAD_SIZE];
-			/** Payload length in bytes. */
-			size_t     payload_len;
+			/** Pre-built frame; FCNT and MIC are stamped by the MAC at send time. */
+			struct ls_frame  frame;
 			/** Signing/encryption key, pre-resolved at enqueue time. */
-			uint8_t    key[LS_NETWORK_KEY_SIZE];
+			uint8_t          key[LS_NETWORK_KEY_SIZE];
 			/** When true, arm the retry timer and wait for a response. */
-			bool       want_resp;
+			bool             want_resp;
 			/** Frame type of the expected response (LS_TYPE_*). */
-			uint8_t    resp_type;
+			uint8_t          resp_type;
 			/**
 			 * Source address of the expected response.
 			 * Use LS_BCAST_ADDR to match any source.
 			 */
-			uint16_t   resp_src;
+			uint16_t         resp_src;
 			/**
 			 * Response window in milliseconds.  A value of 0 falls
 			 * back to the default ACK timeout computation.
 			 */
-			uint32_t   timeout_ms;
-			ls_send_cb done_cb;
-			void      *user_data;
+			uint32_t         timeout_ms;
+			ls_send_cb       done_cb;
+			void            *user_data;
 		} tx;
 	};
 };

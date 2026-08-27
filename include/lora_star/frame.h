@@ -95,6 +95,23 @@ size_t ls_frame_size(size_t payload_len);
 void ls_frame_init(struct ls_frame *frame);
 
 /**
+ * @brief Initialise a frame and write the fixed header fields in one call.
+ *
+ * Equivalent to calling @ref ls_frame_init followed by
+ * @ref ls_frame_set_type, @ref ls_frame_set_src, @ref ls_frame_set_dst, and
+ * @ref ls_frame_set_flags.  Payload must be written separately with
+ * @ref ls_frame_set_payload when needed.
+ *
+ * @param frame Pointer to the frame.
+ * @param type  Frame type (one of the @c LS_TYPE_* constants).
+ * @param src   Source address.
+ * @param dst   Destination address.
+ * @param flags Frame flags byte (combination of @c LS_FLAG_* constants).
+ */
+void ls_frame_build(struct ls_frame *frame,
+		    uint8_t type, uint16_t src, uint16_t dst, uint8_t flags);
+
+/**
  * @brief Set the frame type.
  *
  * Valid values are:

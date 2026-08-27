@@ -19,6 +19,16 @@ void ls_frame_init(struct ls_frame *frame)
 	frame->payload_len = 0;
 }
 
+void ls_frame_build(struct ls_frame *frame,
+		    uint8_t type, uint16_t src, uint16_t dst, uint8_t flags)
+{
+	ls_frame_init(frame);
+	ls_frame_set_type(frame, type);
+	ls_frame_set_src(frame, src);
+	ls_frame_set_dst(frame, dst);
+	ls_frame_set_flags(frame, flags);
+}
+
 static struct ls_frame_hdr *frame_get_hdr(struct ls_frame *frame)
 {
 	return (struct ls_frame_hdr *)frame->buf;
