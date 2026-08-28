@@ -15,11 +15,12 @@ int ls_mac_init(struct ls_ctx *ctx);
  *
  * Behaviour depends on frame type:
  *
- * - DATA / ACK: stamps FCNT from @p ctx->fcnt (post-increment), encrypts the
- *   payload with AES-128-CTR, then authenticates the frame with AES-CMAC.
- *   Uses @p key when non-NULL, otherwise falls back to @p ctx->network_key.
+ * - DATA / ACK: stamps FCNT from @p ctx->fcnt (pre-increment, so the first
+ *   value sent is 1), encrypts the payload with AES-128-CTR, then
+ *   authenticates the frame with AES-CMAC.  Uses @p key when non-NULL,
+ *   otherwise falls back to @p ctx->network_key.
  *
- * - JOIN_ACCEPT: stamps FCNT from @p ctx->fcnt (post-increment), then signs
+ * - JOIN_ACCEPT: stamps FCNT from @p ctx->fcnt (pre-increment), then signs
  *   the frame with AES-CMAC using @p key.  No payload encryption.
  *
  * - JOIN_REQ: leaves FCNT unchanged (caller sets it to 0), then signs the

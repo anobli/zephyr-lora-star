@@ -10,6 +10,7 @@
 
 #include <lora_star/lora_star.h>
 #include <lora_star/mac.h>
+#include <lora_star/coord.h>
 #include <lora_star/pairing.h>
 
 LOG_MODULE_REGISTER(coord_sample, LOG_LEVEL_INF);

@@ -17,6 +17,7 @@
 #include <lora_star/lora_star.h>
 #include <lora_star/mac.h>
 #include <lora_star/crypto.h>
+#include <lora_star/coord.h>
 #include <lora_star/pairing.h>
 
 #include "storage.h"
@@ -224,24 +225,6 @@ out:
 
 #ifdef CONFIG_LORA_STAR_COORDINATOR
 
-static void pairing_on_node_loaded(uint16_t short_addr,
-				   const struct ls_node_record *rec,
-				   void *user_data)
-{
-	struct ls_coord_pairing_ctx *pair_ctx = user_data;
-	int i;
-
-	for (i = 0; i < CONFIG_LORA_STAR_MAX_NODES; i++) {
-		if (!pair_ctx->nodes[i].active) {
-			pair_ctx->nodes[i].active     = true;
-			pair_ctx->nodes[i].short_addr = short_addr;
-			pair_ctx->nodes[i].rec        = *rec;
-			return;
-		}
-	}
-	LOG_WRN("Node table full — dropping addr 0x%04x", short_addr);
-}
-
 static void pairing_close_window(struct ls_coord_pairing_ctx *pair_ctx)
 {
 	ls_unregister_frame_cb(pair_ctx->_ctx, pair_ctx->_join_req_hdl);
@@ -256,32 +239,6 @@ static void pairing_close_work_handler(struct k_work *work)
 		CONTAINER_OF(work, struct ls_coord_pairing_ctx, _close_work.work);
 
 	pairing_close_window(pair_ctx);
-}
-
-static int pairing_find_node_by_eui(struct ls_coord_pairing_ctx *pair_ctx,
-				    const uint8_t dev_eui[LS_DEV_EUI_SIZE])
-{
-	int i;
-
-	for (i = 0; i < CONFIG_LORA_STAR_MAX_NODES; i++) {
-		if (pair_ctx->nodes[i].active &&
-		    memcmp(pair_ctx->nodes[i].rec.dev_eui, dev_eui, LS_DEV_EUI_SIZE) == 0) {
-			return i;
-		}
-	}
-	return -1;
-}
-
-static int pairing_alloc_node(struct ls_coord_pairing_ctx *pair_ctx)
-{
-	int i;
-
-	for (i = 0; i < CONFIG_LORA_STAR_MAX_NODES; i++) {
-		if (!pair_ctx->nodes[i].active) {
-			return i;
-		}
-	}
-	return -1;
 }
 
 static void pairing_join_accept_sent_cb(int ret, void *user_data)
@@ -306,8 +263,6 @@ static int pairing_join_req_cb(struct ls_ctx *ctx, struct ls_frame *frame,
 	uint8_t ctr_nonce[LS_CTR_NONCE_SIZE];
 	uint16_t short_addr;
 	struct ls_join_accept_payload ja;
-	struct ls_node_record rec;
-	int slot;
 	bool is_repair;
 	int ret;
 
@@ -344,15 +299,9 @@ static int pairing_join_req_cb(struct ls_ctx *ctx, struct ls_frame *frame,
 		return 0;
 	}
 
-	slot = pairing_find_node_by_eui(pair_ctx, jr->dev_eui);
-	is_repair = (slot >= 0);
-
-	if (!is_repair) {
-		slot = pairing_alloc_node(pair_ctx);
-		if (slot < 0) {
-			LOG_ERR("Node table full");
-			return 0;
-		}
+	short_addr = ls_coord_add_node(ctx, jr->dev_eui, LS_BCAST_ADDR, &is_repair);
+	if (short_addr == 0) {
+		return 0;
 	}
 
 	/*
@@ -376,17 +325,6 @@ static int pairing_join_req_cb(struct ls_ctx *ctx, struct ls_frame *frame,
 	if (ret < 0) {
 		LOG_ERR("Key derivation failed");
 		return 0;
-	}
-
-	if (is_repair) {
-		short_addr = pair_ctx->nodes[slot].short_addr;
-	} else {
-		if (pair_ctx->next_addr > LS_ADDR_MAX) {
-			LOG_ERR("Address space exhausted");
-			memset(pairing_key, 0, sizeof(pairing_key));
-			return 0;
-		}
-		short_addr = pair_ctx->next_addr;
 	}
 
 	/*
@@ -428,23 +366,6 @@ static int pairing_join_req_cb(struct ls_ctx *ctx, struct ls_frame *frame,
 	memset(pair_ctx->_priv_key, 0, sizeof(pair_ctx->_priv_key));
 	memset(pair_ctx->_pub_key, 0, sizeof(pair_ctx->_pub_key));
 
-	memset(&rec, 0, sizeof(rec));
-	memcpy(rec.dev_eui, jr->dev_eui, LS_DEV_EUI_SIZE);
-	rec.fcnt_last = 0;
-
-	pair_ctx->nodes[slot].active     = true;
-	pair_ctx->nodes[slot].short_addr = short_addr;
-	pair_ctx->nodes[slot].rec        = rec;
-
-	if (!is_repair) {
-		pair_ctx->next_addr++;
-	}
-
-	ls_storage_coord_save_node(short_addr, &rec);
-	if (!is_repair) {
-		ls_storage_coord_save_next_addr(ctx, pair_ctx->next_addr);
-	}
-
 	pairing_close_window(pair_ctx);
 	k_work_cancel_delayable(&pair_ctx->_close_work);
 
@@ -461,15 +382,13 @@ int ls_pairing_coord_init(struct ls_ctx *ctx, struct ls_coord_pairing_ctx *pair_
 			  ls_pairing_join_cb cb, void *user_data)
 {
 	memset(pair_ctx, 0, sizeof(*pair_ctx));
-	pair_ctx->next_addr   = LS_ADDR_MIN;
 	pair_ctx->_ctx        = ctx;
 	pair_ctx->_join_cb    = cb;
 	pair_ctx->_join_cb_ud = user_data;
 
 	k_work_init_delayable(&pair_ctx->_close_work, pairing_close_work_handler);
 
-	return ls_storage_coord_load(ctx, &pair_ctx->next_addr,
-				     pairing_on_node_loaded, pair_ctx);
+	return 0;
 }
 
 int ls_pairing_coord_start(struct ls_coord_pairing_ctx *pair_ctx)

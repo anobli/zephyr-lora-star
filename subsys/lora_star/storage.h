@@ -47,6 +47,25 @@ int ls_storage_load_network_key(struct ls_ctx *ctx);
 int ls_storage_load_addr(struct ls_ctx *ctx);
 
 /**
+ * @brief Load the last-accepted RX frame counter into @p ctx->_rx_fcnt_last.
+ *
+ * Used by the node role to restore the anti-replay checkpoint for frames
+ * received from the coordinator. Defaults to 0 if never stored.
+ *
+ * @param ctx  LoRa Star context.
+ * @return 0 on success, negative errno on failure.
+ */
+int ls_storage_load_rx_fcnt(struct ls_ctx *ctx);
+
+/**
+ * @brief Save @p ctx->_rx_fcnt_last to Settings.
+ *
+ * @param ctx  LoRa Star context.
+ * @return 0 on success, negative errno on failure.
+ */
+int ls_storage_save_rx_fcnt(struct ls_ctx *ctx);
+
+/**
  * @brief Load all common persistent state into @p ctx.
  *
  * Populates @p ctx->own_addr (sets @p ctx->addr_found if a stored address is

@@ -38,7 +38,12 @@ int ls_mac_send(struct ls_ctx *ctx, struct ls_frame *frame, const uint8_t *key)
 	}
 
 	if (type == LS_TYPE_DATA || type == LS_TYPE_ACK || type == LS_TYPE_JOIN_ACCEPT) {
-		ls_frame_set_fcnt(frame, ctx->fcnt++);
+		/*
+		 * Pre-increment: FCNT values start at 1, never 0, so the first
+		 * frame from a freshly paired peer (fcnt_last = 0) is always
+		 * accepted by the strict "fcnt > fcnt_last" anti-replay check.
+		 */
+		ls_frame_set_fcnt(frame, ++ctx->fcnt);
 	}
 
 	if (type == LS_TYPE_DATA || type == LS_TYPE_ACK) {

@@ -15,6 +15,7 @@
 #include <lora_star/lora_star.h>
 #include <lora_star/mac.h>
 #include <lora_star/radio.h>
+#include <lora_star/coord.h>
 
 #include "storage.h"
 #include "event.h"
@@ -97,7 +98,8 @@ struct ls_ctx *ls_init(const struct device *lora_dev)
 	memset(ctx->network_key, 0, sizeof(ctx->network_key));
 	memset(ctx->_handlers, 0, sizeof(ctx->_handlers));
 
-	ctx->_msgq = &ls_msgq;
+	ctx->_msgq         = &ls_msgq;
+	ctx->_rx_fcnt_last = 0;
 	k_mutex_init(&ctx->_handlers_lock);
 
 	ret = ls_mac_init(ctx);
@@ -113,6 +115,7 @@ struct ls_ctx *ls_init(const struct device *lora_dev)
 
 	ls_storage_load_fcnt(ctx);
 	ls_storage_load_network_key(ctx);
+	ls_storage_load_rx_fcnt(ctx);
 
 #ifdef CONFIG_LORA_STAR_DEFAULT_NETWORK_KEY
 	if (!ctx->network_key_found) {
@@ -135,6 +138,8 @@ done:
 #ifdef CONFIG_LORA_STAR_COORDINATOR
 int ls_init_coord(struct ls_ctx *ctx)
 {
+	int ret;
+
 #ifdef CONFIG_LORA_STAR_DEFAULT_NETWORK_KEY
 	if (!ctx->network_key_found) {
 		LOG_INF("Using compile-time default network key");
@@ -143,7 +148,6 @@ int ls_init_coord(struct ls_ctx *ctx)
 	}
 #else
 	psa_status_t st;
-	int ret;
 
 	if (!ctx->network_key_found) {
 		st = psa_generate_random(ctx->network_key, sizeof(ctx->network_key));
@@ -165,9 +169,40 @@ int ls_init_coord(struct ls_ctx *ctx)
 	ls_storage_save_fcnt(ctx);
 	ls_set_own_addr(ctx, LS_COORD_ADDR);
 	ctx->always_on_rx = true;
+
+	ret = ls_coord_init(ctx);
+	if (ret < 0) {
+		LOG_ERR("ls_coord_init failed: %d", ret);
+		return ret;
+	}
+
 	ls_mac_recv(ctx);
 
 	return 0;
+}
+#endif
+
+#ifdef CONFIG_LORA_STAR_NODE
+static bool ls_node_replay_check(struct ls_ctx *ctx, uint16_t src, uint32_t fcnt)
+{
+	if (src != LS_COORD_ADDR || fcnt <= ctx->_rx_fcnt_last) {
+		return false;
+	}
+
+	ctx->_rx_fcnt_last = fcnt;
+	ls_storage_save_rx_fcnt(ctx);
+	return true;
+}
+#else /* !CONFIG_LORA_STAR_NODE */
+/* Node role not built — never called by ls_replay_check(), but keeps that
+ * dispatch free of #ifdef.
+ */
+static bool ls_node_replay_check(struct ls_ctx *ctx, uint16_t src, uint32_t fcnt)
+{
+	ARG_UNUSED(ctx);
+	ARG_UNUSED(src);
+	ARG_UNUSED(fcnt);
+	return true;
 }
 #endif
 
@@ -346,6 +381,21 @@ static void handle_tx(struct ls_ctx *ctx, struct ls_pending *ps,
 	arm_timer(ps);
 }
 
+/*
+ * Dispatches to the role-specific anti-replay check based on own_addr, which
+ * is LS_COORD_ADDR (0x0000) only for the coordinator — see ls_init_coord()
+ * and ls_init().  Assumes at least one of CONFIG_LORA_STAR_COORDINATOR /
+ * CONFIG_LORA_STAR_NODE is enabled; unenforced, but a build with neither
+ * has no role to run anyway.
+ */
+static bool ls_replay_check(struct ls_ctx *ctx, uint16_t src, uint32_t fcnt)
+{
+	if (ctx->own_addr == LS_COORD_ADDR) {
+		return ls_coord_replay_check(ctx, src, fcnt);
+	}
+	return ls_node_replay_check(ctx, src, fcnt);
+}
+
 static void handle_rx(struct ls_ctx *ctx, struct ls_pending *ps,
 		      struct ls_event *ev)
 {
@@ -355,6 +405,13 @@ static void handle_rx(struct ls_ctx *ctx, struct ls_pending *ps,
 	uint8_t saved_frame_type = ls_frame_get_type(&ps->saved_tx.tx.frame);
 	bool matched             = false;
 	bool consumed;
+
+	if ((frame_type == LS_TYPE_DATA || frame_type == LS_TYPE_ACK) &&
+	    !ls_replay_check(ctx, frame_src, ls_frame_get_fcnt(frame))) {
+		LOG_WRN("Replayed frame from 0x%04x (fcnt=%u), dropping",
+			frame_src, ls_frame_get_fcnt(frame));
+		return;
+	}
 
 	if (ps->active &&
 	    frame_type == ps->resp_type &&

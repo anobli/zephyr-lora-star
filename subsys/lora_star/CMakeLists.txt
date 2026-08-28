@@ -9,4 +9,5 @@ zephyr_library_sources(
 	storage.c
 )
 
+zephyr_library_sources_ifdef(CONFIG_LORA_STAR_COORDINATOR coord.c)
 zephyr_library_sources_ifdef(CONFIG_LORA_STAR_PAIRING pairing.c)

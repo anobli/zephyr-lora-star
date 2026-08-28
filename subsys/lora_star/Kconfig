@@ -25,19 +25,52 @@ config LORA_STAR
 
 if LORA_STAR
 
+choice LORA_STAR_ROLE
+	prompt "LoRa Star device role"
+	depends on LORA
+	default LORA_STAR_ROLE_COORDINATOR
+	help
+	  Select which role(s) this device builds.  Exactly one coordinator
+	  runs per network; every other device pairs with it as a node.
+
+config LORA_STAR_ROLE_COORDINATOR
+	bool "Coordinator role"
+	select LORA_STAR_COORDINATOR
+	help
+	  Build only the coordinator state machine.
+
+config LORA_STAR_ROLE_NODE
+	bool "Node role"
+	depends on HWINFO
+	select LORA_STAR_NODE
+	help
+	  Build only the node state machine.
+
+config LORA_STAR_ROLE_DUAL
+	bool "Dual role (coordinator + node)"
+	depends on HWINFO
+	select LORA_STAR_COORDINATOR
+	select LORA_STAR_NODE
+	help
+	  Build both the coordinator and node state machines into the same
+	  firmware image.  Useful for test rigs where the active role is
+	  chosen at runtime.
+
+endchoice
+
 config LORA_STAR_COORDINATOR
-	bool "Build coordinator role"
+	bool
 	depends on LORA
 	help
 	  Include the coordinator state machine.  Exactly one device in the
-	  network runs as coordinator.
+	  network runs as coordinator.  Enabled via LORA_STAR_ROLE.
 
 config LORA_STAR_NODE
-	bool "Build node role"
+	bool
 	depends on LORA
 	depends on HWINFO
 	help
-	  Include the node state machine.
+	  Include the node state machine.  Enabled via LORA_STAR_ROLE.
 
 config LORA_STAR_PAIRING
 	bool "Enable pairing support"

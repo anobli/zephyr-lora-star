@@ -10,6 +10,7 @@
 #include <zephyr/kernel.h>
 #include <lora_star/lora_star.h>
 #include <lora_star/frame.h>
+#include <lora_star/coord.h>
 
 /* Pairing field sizes */
 #define LS_PUBKEY_SIZE   32U /**< Curve25519 public/private key length in bytes */
@@ -80,19 +81,15 @@ typedef void (*ls_pairing_join_cb)(struct ls_ctx *ctx, uint16_t short_addr,
 /**
  * @brief Coordinator-side pairing context.
  *
- * Owns the node table, address allocator, and ephemeral ECDH state for the
- * current pairing window.  Allocated and held by the coordinator application;
- * pass it to @ref ls_pairing_coord_init() then @ref ls_pairing_coord_start().
- *
- * The @c nodes array and @c next_addr field are readable by the coordinator
- * application for data-path lookups after pairing completes.
+ * Owns the ephemeral ECDH state and window bookkeeping for the current
+ * pairing window.  Node identity and addressing live in @ref ls_coord_ctx
+ * (see lora_star/coord.h) instead — pairing is just one way to populate that
+ * table; a fixed-key deployment can populate it directly with
+ * @c ls_coord_add_node() without ever using pairing.  Allocated and held by
+ * the coordinator application; pass it to @ref ls_pairing_coord_init() then
+ * @ref ls_pairing_coord_start().
  */
 struct ls_coord_pairing_ctx {
-	/** Node table (index = slot; may be read by coordinator app). */
-	struct coord_node nodes[CONFIG_LORA_STAR_MAX_NODES];
-	/** Next ShortAddr to assign; starts at LS_ADDR_MIN after init. */
-	uint16_t          next_addr;
-
 	/** @cond INTERNAL */
 	bool                    _pairing_open;
 	uint8_t                 _priv_key[LS_PUBKEY_SIZE];
@@ -106,21 +103,17 @@ struct ls_coord_pairing_ctx {
 };
 
 /**
- * @brief Initialize coordinator pairing context and load persistent node state.
+ * @brief Initialize coordinator pairing context.
  *
- * Restores next_addr and per-node records from Settings.  Also loads the
- * coordinator's own FCNT from storage and writes it back with
- * @c CONFIG_LORA_STAR_FCNT_REBOOT_INCREMENT added as a reboot guard.
+ * The coordinator's node table must already be initialised (via
+ * @ref ls_init_coord()) — pairing only registers new nodes into that
+ * existing table, it does not own or load it.
  *
- * @note @c ls_storage_init() is called internally; the Settings subsystem
- *       must have been initialized (e.g. via @c settings_subsys_init()) before
- *       this call.
- *
- * @param ctx        LoRa Star context (owns the coordinator FCNT).
+ * @param ctx        LoRa Star context.
  * @param pair_ctx   Pairing context to initialize; zeroed and populated.
  * @param cb         Called when a node completes pairing; may be NULL.
  * @param user_data  Forwarded to @p cb.
- * @return 0 on success, negative errno on storage failure.
+ * @return 0 on success, negative errno on failure.
  */
 int ls_pairing_coord_init(struct ls_ctx *ctx, struct ls_coord_pairing_ctx *pair_ctx,
 			  ls_pairing_join_cb cb, void *user_data);

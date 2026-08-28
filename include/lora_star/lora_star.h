@@ -94,7 +94,7 @@ struct ls_ctx {
 	 *
 	 * When true, @ref ls_mac_send() stops RX before every transmission and
 	 * restarts it immediately after.  Set by the coordinator role during
-	 * @ref ls_pairing_coord_init(); leave false for nodes that manage their own
+	 * @ref ls_init_coord(); leave false for nodes that manage their own
 	 * RX windows via @ref ls_send_data_ack().
 	 */
 	bool always_on_rx;
@@ -103,6 +103,7 @@ struct ls_ctx {
 	struct k_msgq          *_msgq;
 	struct ls_frame_handler _handlers[CONFIG_LORA_STAR_MAX_FRAME_CBS];
 	struct k_mutex          _handlers_lock;
+	uint32_t                _rx_fcnt_last;
 	/** @endcond */
 };
 
@@ -121,12 +122,16 @@ struct ls_ctx *ls_init(const struct device *lora_dev);
 
 #ifdef CONFIG_LORA_STAR_COORDINATOR
 
+struct ls_coord_ctx;
+
 /**
  * @brief Per-node record persisted by the coordinator.
  *
  * Stored in Settings under @c ls/coord/node/<addr> and mirrored in the
- * in-RAM node table.  The MAC layer uses @c fcnt_last for replay protection
- * on every received uplink.
+ * in-RAM node table.  @c fcnt_last is the anti-replay checkpoint for this
+ * node, enforced on every received uplink by @ref ls_coord_replay_check().
+ * Populated either by pairing (@ref ls_pairing_coord_init()) or directly via
+ * @c ls_coord_add_node() for nodes provisioned out of band.
  */
 struct ls_node_record {
 	/** Device EUI — uniquely identifies the node across pairing sessions. */
@@ -147,11 +152,21 @@ struct coord_node {
 	struct ls_node_record rec;
 };
 
+/**
+ * @brief Complete coordinator-role initialisation.
+ *
+ * Loads or generates the network key, applies the FCNT reboot guard, sets
+ * @p ctx->own_addr to @ref LS_COORD_ADDR, enables @p ctx->always_on_rx,
+ * starts async RX, and initialises the node table (see @c ls_coord_init() in
+ * lora_star/coord.h) — restoring it from Settings and enabling anti-replay
+ * checking, independent of whether pairing is used.  Call once after
+ * @ref ls_init() to fully bring up the coordinator service; the node table
+ * itself is owned internally and reachable via @c ls_coord_get().
+ *
+ * @param ctx  LoRa Star context.
+ * @return 0 on success, negative errno on failure.
+ */
 int ls_init_coord(struct ls_ctx *ctx);
-#endif
-
-#ifdef CONFIG_LORA_STAR_NODE
-int ls_init_node(struct ls_ctx *ctx);
 #endif
 
 /**
@@ -310,11 +325,11 @@ typedef void (*ls_send_cb)(int ret, void *user_data);
  *
  * Frame type determines MAC behaviour:
  *
- * - DATA / ACK: stamps FCNT from @p ctx->fcnt (post-increment), AES-128-CTR
- *   encrypts the payload, then AES-CMAC signs the frame.  Pass NULL for @p key
- *   to use @p ctx->network_key.
+ * - DATA / ACK: stamps FCNT from @p ctx->fcnt (pre-increment, so the first
+ *   value sent is 1), AES-128-CTR encrypts the payload, then AES-CMAC signs
+ *   the frame.  Pass NULL for @p key to use @p ctx->network_key.
  *
- * - JOIN_ACCEPT: stamps FCNT from @p ctx->fcnt (post-increment), then
+ * - JOIN_ACCEPT: stamps FCNT from @p ctx->fcnt (pre-increment), then
  *   AES-CMAC signs the frame with @p key.  No encryption.
  *
  * - JOIN_REQ: leaves FCNT at 0 (caller convention), then AES-CMAC signs

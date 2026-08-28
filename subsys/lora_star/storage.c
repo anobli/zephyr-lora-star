@@ -13,10 +13,11 @@
 
 LOG_MODULE_REGISTER(ls_storage, CONFIG_LORA_STAR_LOG_LEVEL);
 
-#define KEY_COMMON_ROOT   "ls/common"
-#define KEY_COMMON_ADDR   "ls/common/addr"
-#define KEY_COMMON_FCNT   "ls/common/fcnt"
-#define KEY_COMMON_NETKEY "ls/common/netkey"
+#define KEY_COMMON_ROOT    "ls/common"
+#define KEY_COMMON_ADDR    "ls/common/addr"
+#define KEY_COMMON_FCNT    "ls/common/fcnt"
+#define KEY_COMMON_NETKEY  "ls/common/netkey"
+#define KEY_COMMON_RX_FCNT "ls/common/rx_fcnt"
 
 #define KEY_COORD_ROOT      "ls/coord"
 #define KEY_COORD_NEXT_ADDR "ls/coord/next_addr"
@@ -96,6 +97,12 @@ static int common_h_set(const char *key, size_t len,
 		/* TODO: improve the way to load key and manage override default key */
 		if (ls_is_network_key_set(g_ctx))
 			g_ctx->network_key_found = true;
+	} else if (strcmp(key, "rx_fcnt") == 0) {
+		n = read_cb(cb_arg, &g_ctx->_rx_fcnt_last, sizeof(uint32_t));
+		if (n != sizeof(uint32_t)) {
+			LOG_ERR("short read for rx_fcnt: %zd", n);
+			return -EINVAL;
+		}
 	}
 
 	return 0;
@@ -164,6 +171,22 @@ int ls_storage_load_addr(struct ls_ctx *ctx)
 	ret = settings_load_subtree(KEY_COMMON_ADDR);
 	g_ctx = NULL;
 	return ret;
+}
+
+int ls_storage_load_rx_fcnt(struct ls_ctx *ctx)
+{
+	int ret;
+
+	g_ctx = ctx;
+	ret = settings_load_subtree(KEY_COMMON_RX_FCNT);
+	g_ctx = NULL;
+	return ret;
+}
+
+int ls_storage_save_rx_fcnt(struct ls_ctx *ctx)
+{
+	return settings_save_one(KEY_COMMON_RX_FCNT, &ctx->_rx_fcnt_last,
+				  sizeof(ctx->_rx_fcnt_last));
 }
 
 int ls_storage_load_all(struct ls_ctx *ctx)
