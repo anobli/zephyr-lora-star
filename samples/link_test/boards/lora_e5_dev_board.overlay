@@ -1,0 +1,10 @@
+/*
+ * Pairing button, bound to the same physical pin as the "sw0" alias
+ * (boot_button, PB13) so pressing SW1 on the board starts pairing.
+ */
+/ {
+	pairing-button {
+		compatible = "lora_star,pairing-button";
+		gpios = <&gpiob 13 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+	};
+};

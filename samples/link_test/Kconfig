@@ -1,0 +1,51 @@
+mainmenu "LoRa Star Link Test Sample"
+
+choice LORA_STAR_LINK_TEST_ROLE
+	prompt "Device role"
+	default LORA_STAR_LINK_TEST_NODE
+
+config LORA_STAR_LINK_TEST_COORDINATOR
+	bool "Coordinator"
+	help
+	  Build as the link-test coordinator.  Sends periodic DATA frames with
+	  ACK_REQ to the paired node and tracks delivery statistics
+	  (error% and retry%).
+
+config LORA_STAR_LINK_TEST_NODE
+	bool "Node"
+	help
+	  Build as the link-test node.  Stays in continuous receive and sends an
+	  ACK for every DATA frame that carries LS_FLAG_ACK_REQ.
+
+endchoice
+
+config LORA_STAR_LINK_TEST_PERIOD_S
+	int "Coordinator transmit interval (seconds)"
+	default 5
+	range 1 3600
+	depends on LORA_STAR_LINK_TEST_COORDINATOR
+	help
+	  How often the coordinator sends a new DATA frame to the node.
+
+config LORA_STAR_LINK_TEST_MAX_RETRIES
+	int "Application-level retry limit per packet"
+	default 3
+	range 1 10
+	depends on LORA_STAR_LINK_TEST_COORDINATOR
+	help
+	  Maximum number of retry attempts per packet before the coordinator
+	  counts it as lost.  Each retry is a fresh ls_send_data_ack_async()
+	  call.  CONFIG_LORA_STAR_TX_MAX_RETRIES must be 0 (set in prj.conf)
+	  so every individual attempt is visible to the application.
+
+config LORA_STAR_LINK_TEST_STATS_S
+	int "Statistics log interval (seconds)"
+	default 60
+	range 10 3600
+	depends on LORA_STAR_LINK_TEST_COORDINATOR
+	help
+	  How often the coordinator logs the current error% and retry%
+	  counters.  The counters accumulate for the entire run, so the
+	  percentages represent lifetime averages.
+
+source "Kconfig.zephyr"

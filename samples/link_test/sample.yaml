@@ -1,0 +1,13 @@
+common:
+  tags:
+    - lora_star
+  platform_allow:
+    - lora_e5_dev_board
+  integration_platforms:
+    - lora_e5_dev_board
+  build_only: true
+tests:
+  sample.lora_star.link_test.node: {}
+  sample.lora_star.link_test.coordinator:
+    extra_configs:
+      - CONFIG_LORA_STAR_LINK_TEST_COORDINATOR=y
