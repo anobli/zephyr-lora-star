@@ -1,0 +1,10 @@
+common:
+  tags:
+    - lora_star
+  platform_allow:
+    - lora_e5_dev_board
+  integration_platforms:
+    - lora_e5_dev_board
+  build_only: true
+tests:
+  sample.lora_star.coordinator: {}
