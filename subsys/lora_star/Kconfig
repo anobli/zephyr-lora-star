@@ -100,6 +100,16 @@ config LORA_STAR_PAIRING_CRYPTO_GUARD_MS
 	  200-500 ms in software on a typical Cortex-M MCU.  Increase if pairing
 	  consistently times out on slow hardware.
 
+config LORA_STAR_PAIRING_BUTTON
+	bool "GPIO-triggered pairing button"
+	depends on GPIO
+	help
+	  Start pairing from a devicetree-configured GPIO button, with no
+	  application code required: the coordinator opens a pairing window
+	  and the node broadcasts a JOIN_REQ when the button is pressed.
+	  Requires a devicetree node with compatible = "lora_star,pairing-button"
+	  and a "gpios" phandle to the button GPIO.
+
 endif
 
 config LORA_STAR_DEFAULT_NETWORK_KEY

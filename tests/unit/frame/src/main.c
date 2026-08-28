@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2026 Alexandre Bailon <abailon@baylibre.com>
  * SPDX-License-Identifier: Apache-2.0
  */
 

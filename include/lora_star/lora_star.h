@@ -120,6 +120,13 @@ struct ls_ctx {
  */
 struct ls_ctx *ls_init(const struct device *lora_dev);
 
+/**
+ * @brief Get the LoRa Star protocol context.
+ *
+ * @return Pointer to the static @ref ls_ctx instance, initialised by @ref ls_init().
+ */
+struct ls_ctx *ls_get_ctx(void);
+
 #ifdef CONFIG_LORA_STAR_COORDINATOR
 
 struct ls_coord_ctx;
@@ -180,7 +187,15 @@ int ls_init_coord(struct ls_ctx *ctx);
  * @return true if paired, false otherwise.
  */
 bool ls_is_paired(const struct ls_ctx *ctx);
+
+/**
+ * @brief Check whether the network key has been set.
+ *
+ * @param ctx  LoRa Star context.
+ * @return true if @p ctx->network_key has been set, false otherwise.
+ */
 bool ls_is_network_key_set(const struct ls_ctx *ctx);
+
 /**
  * @brief Set the network key.
  *

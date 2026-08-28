@@ -7,46 +7,25 @@
 
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
-#include <zephyr/drivers/gpio.h>
-#include <zephyr/drivers/hwinfo.h>
 #include <zephyr/logging/log.h>
 
 #include <lora_star/lora_star.h>
 #include <lora_star/pairing.h>
+#include <lora_star/pairing_button.h>
 
 LOG_MODULE_REGISTER(node_sample, LOG_LEVEL_INF);
 
-static const struct gpio_dt_spec pairing_btn =
-	GPIO_DT_SPEC_GET(DT_ALIAS(sw0), gpios);
+static struct ls_ctx *ctx;
 
-static struct gpio_callback       btn_cb;
-static struct ls_ctx             *ctx;
-static struct ls_node_pairing_ctx pair_ctx;
-
-static void pairing_work_fn(struct k_work *work)
+static void on_pairing_done(struct ls_ctx *ls, int result, void *user_data)
 {
-	int ret;
+	ARG_UNUSED(user_data);
 
-	ARG_UNUSED(work);
-
-	LOG_INF("Starting pairing");
-	ret = ls_pairing_node_start(ctx, &pair_ctx);
-	if (ret < 0) {
-		LOG_WRN("Pairing failed: %d", ret);
+	if (result < 0) {
+		LOG_WRN("Pairing failed: %d", result);
 	} else {
-		LOG_INF("Paired — ShortAddr 0x%04x", ctx->own_addr);
+		LOG_INF("Paired — ShortAddr 0x%04x", ls->own_addr);
 	}
-}
-
-K_WORK_DEFINE(pairing_work, pairing_work_fn);
-
-static void btn_isr(const struct device *dev, struct gpio_callback *cb,
-		    uint32_t pins)
-{
-	ARG_UNUSED(dev);
-	ARG_UNUSED(cb);
-	ARG_UNUSED(pins);
-	k_work_submit(&pairing_work);
 }
 
 int main(void)
@@ -62,22 +41,12 @@ int main(void)
 		return -EIO;
 	}
 
-	hwinfo_get_device_id(pair_ctx.dev_eui, LS_DEV_EUI_SIZE);
+	ls_pairing_button_set_done_cb(on_pairing_done, NULL);
 
 	if (ls_is_paired(ctx)) {
 		LOG_INF("Session restored — ShortAddr 0x%04x", ctx->own_addr);
 	} else {
 		LOG_INF("Not paired — press button to start pairing");
-	}
-
-	if (device_is_ready(pairing_btn.port)) {
-		gpio_pin_configure_dt(&pairing_btn, GPIO_INPUT);
-		gpio_pin_interrupt_configure_dt(&pairing_btn,
-						GPIO_INT_EDGE_TO_ACTIVE);
-		gpio_init_callback(&btn_cb, btn_isr, BIT(pairing_btn.pin));
-		gpio_add_callback(pairing_btn.port, &btn_cb);
-	} else {
-		LOG_WRN("Pairing button not available");
 	}
 
 	LOG_INF("Node ready");

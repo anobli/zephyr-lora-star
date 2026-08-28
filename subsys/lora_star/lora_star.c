@@ -135,6 +135,11 @@ done:
 	return ctx;
 }
 
+struct ls_ctx *ls_get_ctx(void)
+{
+	return &ls_ctx_instance;
+}
+
 #ifdef CONFIG_LORA_STAR_COORDINATOR
 int ls_init_coord(struct ls_ctx *ctx)
 {

@@ -5,23 +5,17 @@
 
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
-#include <zephyr/drivers/gpio.h>
 #include <zephyr/logging/log.h>
 
 #include <lora_star/lora_star.h>
 #include <lora_star/mac.h>
 #include <lora_star/coord.h>
 #include <lora_star/pairing.h>
+#include <lora_star/pairing_button.h>
 
 LOG_MODULE_REGISTER(coord_sample, LOG_LEVEL_INF);
 
-static const struct gpio_dt_spec pairing_btn =
-	GPIO_DT_SPEC_GET(DT_ALIAS(sw0), gpios);
-
-static struct gpio_callback        btn_cb;
-static struct k_work               btn_work;
-static struct ls_ctx              *ctx;
-static struct ls_coord_pairing_ctx pair_ctx;
+static struct ls_ctx *ctx;
 
 /* --------------------------------------------------------------------------
  * Application callbacks
@@ -61,25 +55,6 @@ static int on_data(struct ls_ctx *ls, struct ls_frame *frame, void *user_data)
 }
 
 /* --------------------------------------------------------------------------
- * Button handling
- * -------------------------------------------------------------------------- */
-
-static void btn_work_handler(struct k_work *work)
-{
-	ARG_UNUSED(work);
-	LOG_INF("Pairing button pressed — opening pairing window");
-	ls_pairing_coord_start(&pair_ctx);
-}
-
-static void btn_isr(const struct device *dev, struct gpio_callback *cb,
-		    uint32_t pins)
-{
-	ARG_UNUSED(dev);
-	ARG_UNUSED(pins);
-	k_work_submit(&btn_work);
-}
-
-/* --------------------------------------------------------------------------
  * Main
  * -------------------------------------------------------------------------- */
 
@@ -100,25 +75,9 @@ int main(void)
 		return ret;
 	}
 
-	ret = ls_pairing_coord_init(ctx, &pair_ctx, on_join, NULL);
-	if (ret < 0) {
-		LOG_ERR("ls_pairing_coord_init failed: %d", ret);
-		return ret;
-	}
+	ls_pairing_button_set_join_cb(on_join, NULL);
 
 	ls_register_data_cb(ctx, LS_BCAST_ADDR, on_data, NULL);
-
-	k_work_init(&btn_work, btn_work_handler);
-
-	if (device_is_ready(pairing_btn.port)) {
-		gpio_pin_configure_dt(&pairing_btn, GPIO_INPUT);
-		gpio_pin_interrupt_configure_dt(&pairing_btn,
-						GPIO_INT_EDGE_TO_ACTIVE);
-		gpio_init_callback(&btn_cb, btn_isr, BIT(pairing_btn.pin));
-		gpio_add_callback(pairing_btn.port, &btn_cb);
-	} else {
-		LOG_WRN("Pairing button not available");
-	}
 
 	/* Start listening for uplinks. */
 	ls_mac_recv(ctx);

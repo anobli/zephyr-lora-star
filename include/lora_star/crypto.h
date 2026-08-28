@@ -12,6 +12,22 @@
 /** AES-128 block size; CTR mode requires a full-block IV. */
 #define LS_CTR_NONCE_SIZE   16U
 
+/**
+ * @brief Run AES-128-CTR over a buffer in-place.
+ *
+ * CTR mode produces mathematically identical keystreams for encryption and
+ * decryption; @p encrypt only selects which PSA setup call is made
+ * (required for PSA key-usage policy enforcement), not the computation
+ * itself. Used internally by @ref ls_frame_encrypt() and
+ * @ref ls_frame_decrypt() to run CTR mode over the frame payload.
+ *
+ * @param buf     Buffer to encrypt or decrypt in-place.
+ * @param len     Length of @p buf in bytes.
+ * @param key     16-byte session key.
+ * @param nonce   16-byte CTR nonce/IV block.
+ * @param encrypt Non-zero for encryption, zero for decryption.
+ * @return 0 or a negative number in case of error.
+ */
 int ls_crypto_ctr(uint8_t *buf, size_t len, const uint8_t key[LS_NETWORK_KEY_SIZE],
 		  const uint8_t nonce[LS_CTR_NONCE_SIZE], int encrypt);
 

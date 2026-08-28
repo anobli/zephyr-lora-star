@@ -11,3 +11,4 @@ zephyr_library_sources(
 
 zephyr_library_sources_ifdef(CONFIG_LORA_STAR_COORDINATOR coord.c)
 zephyr_library_sources_ifdef(CONFIG_LORA_STAR_PAIRING pairing.c)
+zephyr_library_sources_ifdef(CONFIG_LORA_STAR_PAIRING_BUTTON pairing_button.c)

@@ -8,6 +8,15 @@
 
 #include <lora_star/lora_star.h>
 
+/**
+ * @brief Initialise the MAC layer.
+ *
+ * Initialises the radio for transmission via @ref ls_radio_init(). Call
+ * once, after @ref ls_init(), before any send or receive operation.
+ *
+ * @param ctx  LoRa Star context.
+ * @return 0 on success, negative errno on failure.
+ */
 int ls_mac_init(struct ls_ctx *ctx);
 
 /**
