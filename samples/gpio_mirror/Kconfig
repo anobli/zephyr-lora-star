@@ -1,0 +1,39 @@
+mainmenu "LoRa Star GPIO Mirror Sample"
+
+config LORA_STAR_GPIO_MIRROR_FORCE_PERIODIC
+	bool "Force periodic downlink (ignore sw1)"
+	default n
+	help
+	  When y, the coordinator always uses a periodic timer to broadcast
+	  to nodes, even if the sw1 DTS alias is defined. Useful for testing
+	  the downlink path without a physical signal input.
+
+config LORA_STAR_GPIO_MIRROR_PERIOD_S
+	int "Coordinator broadcast period (seconds)"
+	default 60
+	range 5 3600
+	help
+	  Interval between periodic broadcasts when the periodic path is
+	  active (sw1 absent or LORA_STAR_GPIO_MIRROR_FORCE_PERIODIC=y).
+
+config LORA_STAR_GPIO_MIRROR_CONFIRM_TIMEOUT_S
+	int "Coordinator confirmation timeout (seconds)"
+	default 10
+	range 1 300
+	help
+	  How long the coordinator waits for a node to echo back the applied
+	  state before retrying the downlink (or logging an error if retries
+	  are exhausted).  Nodes are always in RX, so the round-trip is a few
+	  seconds; 10 s is a safe default.
+
+config LORA_STAR_GPIO_MIRROR_MAX_RETRIES
+	int "Maximum downlink retries after a confirmation timeout"
+	default 2
+	range 0 10
+	help
+	  Number of times the coordinator re-sends a downlink when no
+	  confirmation is received within CONFIRM_TIMEOUT_S.  Each retry
+	  rearms the same timeout window.  Set to 0 to disable retries (log
+	  the error immediately on the first timeout).
+
+source "Kconfig.zephyr"

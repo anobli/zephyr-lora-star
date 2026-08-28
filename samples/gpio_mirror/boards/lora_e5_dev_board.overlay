@@ -1,0 +1,11 @@
+/*
+ * Pairing button, bound to the same physical pin as the "sw0" alias
+ * (boot_button, PB13, labeled SW1). Held at reset it still selects the
+ * device role (see main.c); pressed afterwards it starts pairing.
+ */
+/ {
+	pairing-button {
+		compatible = "lora_star,pairing-button";
+		gpios = <&gpiob 13 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+	};
+};
