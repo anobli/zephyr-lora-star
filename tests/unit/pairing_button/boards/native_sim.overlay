@@ -1,0 +1,11 @@
+/ {
+	lora_fake: lora-fake {
+		compatible = "zephyr,lora-fake";
+		status = "okay";
+	};
+
+	pairing_button: pairing-button {
+		compatible = "lora_star,pairing-button";
+		gpios = <&gpio0 5 GPIO_ACTIVE_HIGH>;
+	};
+};
