@@ -213,7 +213,13 @@ int ls_storage_load_all(struct ls_ctx *ctx)
 
 int ls_storage_save_fcnt(struct ls_ctx *ctx)
 {
-	return settings_save_one(KEY_COMMON_FCNT, &ctx->fcnt, sizeof(ctx->fcnt));
+	int ret;
+
+	ret = settings_save_one(KEY_COMMON_FCNT, &ctx->fcnt, sizeof(ctx->fcnt));
+	if (ret == 0) {
+		ctx->_fcnt_saved = ctx->fcnt;
+	}
+	return ret;
 }
 
 int ls_storage_save_network_key(struct ls_ctx *ctx)
@@ -230,7 +236,7 @@ int ls_storage_save_all(struct ls_ctx *ctx)
 		return ret;
 	}
 
-	ret = settings_save_one(KEY_COMMON_FCNT, &ctx->fcnt, sizeof(ctx->fcnt));
+	ret = ls_storage_save_fcnt(ctx);
 	if (ret < 0) {
 		return ret;
 	}

@@ -81,6 +81,10 @@ int ls_storage_load_all(struct ls_ctx *ctx);
 /**
  * @brief Save @p ctx->fcnt to Settings.
  *
+ * Also updates @p ctx->_fcnt_saved to @p ctx->fcnt on success, so callers
+ * that gate saves on the delta between the two (see @c ls_mac_send()) see
+ * the gap close immediately.
+ *
  * @param ctx  LoRa Star context.
  * @return 0 on success, negative errno on failure.
  */

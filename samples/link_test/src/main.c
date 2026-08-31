@@ -22,7 +22,9 @@
  *
  * Node behaviour:
  *   Stays in continuous RX.  Calls ls_send_ack() for every DATA frame
- *   carrying LS_FLAG_ACK_REQ.
+ *   carrying LS_FLAG_ACK_REQ, and toggles led0 (if present) on every DATA
+ *   frame received — a visual "still in range" indicator for range testing
+ *   without a serial console.
  *
  * Statistics definitions (coordinator only):
  *   sent   — distinct packets initiated (retries of the same packet are not
@@ -36,6 +38,7 @@
 
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
+#include <zephyr/drivers/gpio.h>
 #include <zephyr/logging/log.h>
 #include <lora_star/lora_star.h>
 #include <lora_star/mac.h>
@@ -237,6 +240,13 @@ static int coord_init(const struct device *lora_dev)
 
 #if IS_ENABLED(CONFIG_LORA_STAR_LINK_TEST_NODE)
 
+#if DT_NODE_EXISTS(DT_ALIAS(led0))
+static const struct gpio_dt_spec status_led = GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);
+#define HAVE_STATUS_LED 1
+#else
+#define HAVE_STATUS_LED 0
+#endif
+
 static void node_pairing_done(struct ls_ctx *ctx, int result, void *user_data)
 {
 	ARG_UNUSED(ctx);
@@ -261,6 +271,10 @@ static int node_on_recv(struct ls_ctx *ctx, struct ls_frame *frame,
 		ls_send_ack(ctx, ls_frame_get_src(frame));
 	}
 
+#if HAVE_STATUS_LED
+	gpio_pin_toggle_dt(&status_led);
+#endif
+
 	return 0;
 }
 
@@ -273,6 +287,17 @@ static int node_init(const struct device *lora_dev)
 	}
 
 	ls_pairing_button_set_done_cb(node_pairing_done, NULL);
+
+#if HAVE_STATUS_LED
+	if (device_is_ready(status_led.port)) {
+		gpio_pin_configure_dt(&status_led, GPIO_OUTPUT_INACTIVE);
+		LOG_INF("led0 ready — will toggle on every received frame");
+	} else {
+		LOG_WRN("led0 not ready");
+	}
+#else
+	LOG_INF("led0 not available on this board — no RX indicator");
+#endif
 
 	/*
 	 * The node stays in continuous RX so it can receive coordinator

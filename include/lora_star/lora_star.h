@@ -82,7 +82,14 @@ struct ls_ctx {
 
 	bool addr_found;
 
-	/** Monotonic TX frame counter, stamped as FCNT on every transmitted frame. */
+	/**
+	 * Monotonic TX frame counter, stamped as FCNT on every transmitted frame.
+	 *
+	 * Persisted periodically by @ref ls_mac_send() (every
+	 * @c CONFIG_LORA_STAR_FCNT_REBOOT_INCREMENT increments) so that the
+	 * reboot guard applied in @ref ls_init() is always sufficient to keep
+	 * FCNT strictly ahead of the last value a peer actually accepted.
+	 */
 	uint32_t fcnt;
 
 	/** Network key used by the MAC layer to encrypt and sign DATA and ACK frames. */
@@ -104,6 +111,7 @@ struct ls_ctx {
 	struct ls_frame_handler _handlers[CONFIG_LORA_STAR_MAX_FRAME_CBS];
 	struct k_mutex          _handlers_lock;
 	uint32_t                _rx_fcnt_last;
+	uint32_t                _fcnt_saved;
 	/** @endcond */
 };
 

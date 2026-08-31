@@ -160,7 +160,11 @@ config LORA_STAR_FCNT_REBOOT_INCREMENT
 	default 32
 	help
 	  After a reboot, FCNT is restored from Settings then incremented by
-	  this value to account for frames sent before the last save.
+	  this value to account for frames sent before the last save. FCNT is
+	  also flushed to Settings every time it advances by this many counts
+	  (see ls_mac_send()), so the two uses must share one value: the save
+	  threshold bounds how far FCNT can be ahead of the persisted value at
+	  any moment, and the reboot guard must cover exactly that same gap.
 
 config LORA_STAR_FREQUENCY
 	int "LoRa carrier frequency (Hz)"

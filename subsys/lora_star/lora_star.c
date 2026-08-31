@@ -100,6 +100,7 @@ struct ls_ctx *ls_init(const struct device *lora_dev)
 
 	ctx->_msgq         = &ls_msgq;
 	ctx->_rx_fcnt_last = 0;
+	ctx->_fcnt_saved   = 0;
 	k_mutex_init(&ctx->_handlers_lock);
 
 	ret = ls_mac_init(ctx);

@@ -8,6 +8,7 @@
 #include <lora_star/crypto.h>
 
 #include "event.h"
+#include "storage.h"
 
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(ls_mac, CONFIG_LORA_STAR_LOG_LEVEL);
@@ -44,6 +45,18 @@ int ls_mac_send(struct ls_ctx *ctx, struct ls_frame *frame, const uint8_t *key)
 		 * accepted by the strict "fcnt > fcnt_last" anti-replay check.
 		 */
 		ls_frame_set_fcnt(frame, ++ctx->fcnt);
+
+		/*
+		 * Flush FCNT to Settings at least every FCNT_REBOOT_INCREMENT
+		 * frames. Without this, a peer's anti-replay checkpoint can run
+		 * far ahead of what a reboot restores (Settings would otherwise
+		 * hold whatever was last saved, e.g. at pairing time), so every
+		 * frame sent after a reboot gets rejected as a replay until FCNT
+		 * climbs back past the peer's last-accepted value.
+		 */
+		if (ctx->fcnt - ctx->_fcnt_saved >= CONFIG_LORA_STAR_FCNT_REBOOT_INCREMENT) {
+			ls_storage_save_fcnt(ctx);
+		}
 	}
 
 	if (type == LS_TYPE_DATA || type == LS_TYPE_ACK) {
