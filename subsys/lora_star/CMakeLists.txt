@@ -7,6 +7,7 @@ zephyr_library_sources(
 	crypto.c
 	lora_star.c
 	storage.c
+	rejoin.c
 )
 
 zephyr_library_sources_ifdef(CONFIG_LORA_STAR_COORDINATOR coord.c)

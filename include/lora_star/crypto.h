@@ -32,6 +32,29 @@ int ls_crypto_ctr(uint8_t *buf, size_t len, const uint8_t key[LS_NETWORK_KEY_SIZ
 		  const uint8_t nonce[LS_CTR_NONCE_SIZE], int encrypt);
 
 /**
+ * @brief Derive a 16-byte key using HKDF-SHA256 (RFC 5869).
+ *
+ * Generic two-step (extract-then-expand) derivation shared by the pairing
+ * and rejoin handshakes to turn a secret they already both hold (an ECDH
+ * shared secret, or the long-term network key) into a purpose-specific key.
+ * @p salt and @p info should differ between uses so the two protocols never
+ * derive colliding keys from related inputs.
+ *
+ * @param ikm      Input keying material (the secret being derived from).
+ * @param ikm_len  Length of @p ikm in bytes.
+ * @param salt     HKDF extract-step salt.
+ * @param salt_len Length of @p salt in bytes.
+ * @param info     HKDF expand-step context / domain-separation string.
+ * @param info_len Length of @p info in bytes.
+ * @param key      Output buffer, @ref LS_NETWORK_KEY_SIZE bytes.
+ * @return 0 or a negative number in case of error.
+ */
+int ls_crypto_hkdf(const uint8_t *ikm, size_t ikm_len,
+		   const uint8_t *salt, size_t salt_len,
+		   const uint8_t *info, size_t info_len,
+		   uint8_t key[LS_NETWORK_KEY_SIZE]);
+
+/**
  * @brief Encrypt the frame payload in-place using AES-128-CTR.
  *
  * The CTR nonce is derived deterministically as FCNT (4B LE) || SRC (2B LE) || 0x00…(10B).

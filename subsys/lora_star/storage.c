@@ -15,9 +15,7 @@ LOG_MODULE_REGISTER(ls_storage, CONFIG_LORA_STAR_LOG_LEVEL);
 
 #define KEY_COMMON_ROOT    "ls/common"
 #define KEY_COMMON_ADDR    "ls/common/addr"
-#define KEY_COMMON_FCNT    "ls/common/fcnt"
 #define KEY_COMMON_NETKEY  "ls/common/netkey"
-#define KEY_COMMON_RX_FCNT "ls/common/rx_fcnt"
 
 #define KEY_COORD_ROOT      "ls/coord"
 #define KEY_COORD_NEXT_ADDR "ls/coord/next_addr"
@@ -81,12 +79,6 @@ static int common_h_set(const char *key, size_t len,
 			return -EINVAL;
 		}
 		g_ctx->addr_found = true;
-	} else if (strcmp(key, "fcnt") == 0) {
-		n = read_cb(cb_arg, &g_ctx->fcnt, sizeof(uint32_t));
-		if (n != sizeof(uint32_t)) {
-			LOG_ERR("short read for fcnt: %zd", n);
-			return -EINVAL;
-		}
 	} else if (strcmp(key, "netkey") == 0) {
 		n = read_cb(cb_arg, g_ctx->network_key, LS_NETWORK_KEY_SIZE);
 		if (n != LS_NETWORK_KEY_SIZE) {
@@ -97,12 +89,6 @@ static int common_h_set(const char *key, size_t len,
 		/* TODO: improve the way to load key and manage override default key */
 		if (ls_is_network_key_set(g_ctx))
 			g_ctx->network_key_found = true;
-	} else if (strcmp(key, "rx_fcnt") == 0) {
-		n = read_cb(cb_arg, &g_ctx->_rx_fcnt_last, sizeof(uint32_t));
-		if (n != sizeof(uint32_t)) {
-			LOG_ERR("short read for rx_fcnt: %zd", n);
-			return -EINVAL;
-		}
 	}
 
 	return 0;
@@ -143,16 +129,6 @@ int ls_storage_init(void)
 	return 0;
 }
 
-int ls_storage_load_fcnt(struct ls_ctx *ctx)
-{
-	int ret;
-
-	g_ctx = ctx;
-	ret = settings_load_subtree(KEY_COMMON_FCNT);
-	g_ctx = NULL;
-	return ret;
-}
-
 int ls_storage_load_network_key(struct ls_ctx *ctx)
 {
 	int ret;
@@ -173,30 +149,9 @@ int ls_storage_load_addr(struct ls_ctx *ctx)
 	return ret;
 }
 
-int ls_storage_load_rx_fcnt(struct ls_ctx *ctx)
-{
-	int ret;
-
-	g_ctx = ctx;
-	ret = settings_load_subtree(KEY_COMMON_RX_FCNT);
-	g_ctx = NULL;
-	return ret;
-}
-
-int ls_storage_save_rx_fcnt(struct ls_ctx *ctx)
-{
-	return settings_save_one(KEY_COMMON_RX_FCNT, &ctx->_rx_fcnt_last,
-				  sizeof(ctx->_rx_fcnt_last));
-}
-
 int ls_storage_load_all(struct ls_ctx *ctx)
 {
 	int ret;
-
-	ret = ls_storage_load_fcnt(ctx);
-	if (ret < 0) {
-		return ret;
-	}
 
 	ret = ls_storage_load_network_key(ctx);
 	if (ret < 0) {
@@ -211,17 +166,6 @@ int ls_storage_load_all(struct ls_ctx *ctx)
 	return ctx->addr_found ? 0 : -ENOENT;
 }
 
-int ls_storage_save_fcnt(struct ls_ctx *ctx)
-{
-	int ret;
-
-	ret = settings_save_one(KEY_COMMON_FCNT, &ctx->fcnt, sizeof(ctx->fcnt));
-	if (ret == 0) {
-		ctx->_fcnt_saved = ctx->fcnt;
-	}
-	return ret;
-}
-
 int ls_storage_save_network_key(struct ls_ctx *ctx)
 {
 	return settings_save_one(KEY_COMMON_NETKEY, ctx->network_key, LS_NETWORK_KEY_SIZE);
@@ -232,11 +176,6 @@ int ls_storage_save_all(struct ls_ctx *ctx)
 	int ret;
 
 	ret = settings_save_one(KEY_COMMON_ADDR, &ctx->own_addr, sizeof(ctx->own_addr));
-	if (ret < 0) {
-		return ret;
-	}
-
-	ret = ls_storage_save_fcnt(ctx);
 	if (ret < 0) {
 		return ret;
 	}

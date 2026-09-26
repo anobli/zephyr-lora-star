@@ -5,6 +5,8 @@
 
 #include <string.h>
 
+#include <zephyr/kernel.h>
+
 #include <lora_star/coord.h>
 
 #include "storage.h"
@@ -132,12 +134,50 @@ bool ls_coord_replay_check(struct ls_ctx *ctx, uint16_t src, uint32_t fcnt)
 	ARG_UNUSED(ctx);
 
 	node = ls_coord_find_node(src);
-	if (node == NULL || fcnt <= node->rec.fcnt_last) {
+	if (node == NULL || !node->session_active || fcnt <= node->session_fcnt_last) {
 		return false;
 	}
 
-	node->rec.fcnt_last = fcnt;
-	ls_storage_coord_save_node(src, &node->rec);
+	node->session_fcnt_last = fcnt;
+	return true;
+}
+
+const uint8_t *ls_coord_get_session_key(uint16_t short_addr)
+{
+	struct coord_node *node = ls_coord_find_node(short_addr);
+
+	return (node && node->session_active) ? node->session_key : NULL;
+}
+
+void ls_coord_set_session(uint16_t short_addr, const uint8_t session_key[LS_NETWORK_KEY_SIZE])
+{
+	struct coord_node *node = ls_coord_find_node(short_addr);
+
+	if (!node) {
+		return;
+	}
+
+	memcpy(node->session_key, session_key, LS_NETWORK_KEY_SIZE);
+	node->session_fcnt_last = 0;
+	node->session_active    = true;
+}
+
+bool ls_coord_notify_allowed(uint16_t short_addr)
+{
+	struct coord_node *node = ls_coord_find_node(short_addr);
+	int64_t now;
+
+	if (!node) {
+		return false;
+	}
+
+	now = k_uptime_get();
+	if (node->last_notify_uptime != 0 &&
+	    (now - node->last_notify_uptime) < CONFIG_LORA_STAR_SESSION_UNKNOWN_COOLDOWN_MS) {
+		return false;
+	}
+
+	node->last_notify_uptime = now;
 	return true;
 }
 

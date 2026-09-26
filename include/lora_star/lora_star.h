@@ -85,14 +85,21 @@ struct ls_ctx {
 	/**
 	 * Monotonic TX frame counter, stamped as FCNT on every transmitted frame.
 	 *
-	 * Persisted periodically by @ref ls_mac_send() (every
-	 * @c CONFIG_LORA_STAR_FCNT_REBOOT_INCREMENT increments) so that the
-	 * reboot guard applied in @ref ls_init() is always sufficient to keep
-	 * FCNT strictly ahead of the last value a peer actually accepted.
+	 * Session-scoped RAM state, not persisted: reset to 0 every time the
+	 * rejoin handshake (see lora_star/rejoin.h) establishes a fresh session
+	 * key.  Replay protection comes from the session key being new each
+	 * time, not from FCNT surviving a reboot.
 	 */
 	uint32_t fcnt;
 
-	/** Network key used by the MAC layer to encrypt and sign DATA and ACK frames. */
+	/**
+	 * Long-term network key, persisted to Settings.
+	 *
+	 * Delivered to a node via pairing (@ref ls_set_network_key()) or a
+	 * fixed compile-time value.  Used only to bootstrap the rejoin
+	 * handshake (signing REJOIN_REQ, deriving the session key) — actual
+	 * DATA/ACK traffic is protected by the derived @c _session_key instead.
+	 */
 	uint8_t network_key[LS_NETWORK_KEY_SIZE];
 	bool network_key_found;
 
@@ -110,8 +117,9 @@ struct ls_ctx {
 	struct k_msgq          *_msgq;
 	struct ls_frame_handler _handlers[CONFIG_LORA_STAR_MAX_FRAME_CBS];
 	struct k_mutex          _handlers_lock;
-	uint32_t                _rx_fcnt_last;
-	uint32_t                _fcnt_saved;
+	uint8_t                 _session_key[LS_NETWORK_KEY_SIZE];
+	uint32_t                _session_rx_fcnt;
+	bool                    _session_active;
 	/** @endcond */
 };
 
@@ -119,9 +127,12 @@ struct ls_ctx {
  * @brief Initialise the LoRa Star stack.
  *
  * Configures the radio, initialises the RX queue, and starts the protocol
- * thread.  Attempts to restore a previously persisted node session from
- * Settings; if found, @ref ls_is_paired() returns true immediately.  When
- * async RX is not started here; call @ref ls_mac_recv() when you are ready to receive.
+ * thread.  Attempts to restore a previously persisted node identity (network
+ * key + short address) from Settings; if found, @ref ls_is_paired() returns
+ * true immediately and (on @c CONFIG_LORA_STAR_NODE builds) the rejoin
+ * handshake is started automatically to establish a fresh session — see
+ * lora_star/rejoin.h.  Async RX is not started here; call @ref ls_mac_recv()
+ * when you are ready to receive.
  *
  * @param lora_dev  LoRa radio device (e.g. @c DEVICE_DT_GET(DT_ALIAS(lora0))).
  * @return Pointer to the static @ref ls_ctx instance, or NULL on failure.
@@ -143,40 +154,58 @@ struct ls_coord_ctx;
  * @brief Per-node record persisted by the coordinator.
  *
  * Stored in Settings under @c ls/coord/node/<addr> and mirrored in the
- * in-RAM node table.  @c fcnt_last is the anti-replay checkpoint for this
- * node, enforced on every received uplink by @ref ls_coord_replay_check().
+ * in-RAM node table.  Only long-lived identity lives here — the anti-replay
+ * checkpoint and session key are RAM-only (see @ref coord_node) and reset on
+ * every rejoin, so they are deliberately not part of this persisted record.
  * Populated either by pairing (@ref ls_pairing_coord_init()) or directly via
  * @c ls_coord_add_node() for nodes provisioned out of band.
  */
 struct ls_node_record {
 	/** Device EUI — uniquely identifies the node across pairing sessions. */
-	uint8_t  dev_eui[LS_DEV_EUI_SIZE];
-	/** Last accepted frame counter; updated on every valid uplink. */
-	uint32_t fcnt_last;
+	uint8_t dev_eui[LS_DEV_EUI_SIZE];
 } __packed;
 
 /**
  * @brief Entry in the coordinator's in-RAM node table.
+ *
+ * @c session_key, @c session_fcnt_last, and @c session_active are installed
+ * by @c ls_coord_set_session() when a node completes the rejoin handshake
+ * (see lora_star/rejoin.h) and are never persisted — they exist only for as
+ * long as the coordinator stays up and the node's session remains fresh.
  */
 struct coord_node {
 	/** Slot is occupied. */
 	bool                  active;
 	/** Assigned short address. */
 	uint16_t              short_addr;
-	/** Persistent record: DevEUI and last-seen FCNT. */
+	/** Persistent record: DevEUI. */
 	struct ls_node_record rec;
+	/** Current session key, valid only while @c session_active is true. */
+	uint8_t               session_key[LS_NETWORK_KEY_SIZE];
+	/** Anti-replay checkpoint for the current session; reset to 0 on rejoin. */
+	uint32_t              session_fcnt_last;
+	/** True once this node has completed the rejoin handshake. */
+	bool                  session_active;
+	/**
+	 * Uptime (ms) of the last SESSION_UNKNOWN notice sent to this node, or 0
+	 * if none has been sent yet. RAM-only; rate-limits @ref ls_coord_notify_allowed()
+	 * so a spoofed SRC cannot force repeated rejoin traffic from a real node.
+	 */
+	int64_t               last_notify_uptime;
 };
 
 /**
  * @brief Complete coordinator-role initialisation.
  *
- * Loads or generates the network key, applies the FCNT reboot guard, sets
- * @p ctx->own_addr to @ref LS_COORD_ADDR, enables @p ctx->always_on_rx,
- * starts async RX, and initialises the node table (see @c ls_coord_init() in
- * lora_star/coord.h) — restoring it from Settings and enabling anti-replay
- * checking, independent of whether pairing is used.  Call once after
- * @ref ls_init() to fully bring up the coordinator service; the node table
- * itself is owned internally and reachable via @c ls_coord_get().
+ * Loads or generates the network key, sets @p ctx->own_addr to
+ * @ref LS_COORD_ADDR, enables @p ctx->always_on_rx, starts async RX, and
+ * initialises the node table (see @c ls_coord_init() in lora_star/coord.h)
+ * — restoring it from Settings — and registers the always-on rejoin handler
+ * (see lora_star/rejoin.h) so any node holding the network key can announce
+ * itself and establish a session, independent of whether pairing is used.
+ * Call once after @ref ls_init() to fully bring up the coordinator service;
+ * the node table itself is owned internally and reachable via
+ * @c ls_coord_get().
  *
  * @param ctx  LoRa Star context.
  * @return 0 on success, negative errno on failure.
@@ -185,11 +214,14 @@ int ls_init_coord(struct ls_ctx *ctx);
 #endif
 
 /**
- * @brief Check whether the device has an active session.
+ * @brief Check whether the device holds long-term network credentials.
  *
- * Returns true if both the session key is non-zero and the device has been
+ * Returns true if both the network key is non-zero and the device has been
  * assigned a node short address (i.e. it is not the coordinator address).
  * This covers both the post-pairing case and the boot-from-storage case.
+ * Does @b not mean the device currently has a working session — a freshly
+ * booted node is paired immediately but only gets DATA/ACK connectivity once
+ * the automatic rejoin handshake completes; see @ref ls_is_session_active().
  *
  * @param ctx  LoRa Star context.
  * @return true if paired, false otherwise.
@@ -205,11 +237,25 @@ bool ls_is_paired(const struct ls_ctx *ctx);
 bool ls_is_network_key_set(const struct ls_ctx *ctx);
 
 /**
+ * @brief Check whether a working session is currently active.
+ *
+ * True once the rejoin handshake has installed a session key that DATA/ACK
+ * traffic can actually use — @ref ls_send_data() and friends fail with
+ * @c -ENOTCONN before this is true.  A node is paired (see @ref ls_is_paired())
+ * before it necessarily has a session; the two are established separately.
+ *
+ * @param ctx  LoRa Star context.
+ * @return true if a session key is currently installed, false otherwise.
+ */
+bool ls_is_session_active(const struct ls_ctx *ctx);
+
+/**
  * @brief Set the network key.
  *
- * Called by the pairing application after the network key has been received and
- * decrypted from the JOIN_ACCEPT.  The key is subsequently used by the MAC layer
- * to encrypt and sign DATA and ACK frames.
+ * Called by the pairing application after the network key has been received
+ * and decrypted from the JOIN_ACCEPT. The key is subsequently used to
+ * bootstrap the rejoin handshake (see lora_star/rejoin.h) — not for DATA/ACK
+ * traffic directly, which uses a session key derived during that handshake.
  *
  * @param ctx  LoRa Star context.
  * @param key  16-byte network key.
@@ -279,11 +325,12 @@ void ls_unregister_frame_cb(struct ls_ctx *ctx, struct ls_frame_handler *handler
  *
  * Used by the coordinator (or a peer) to acknowledge a DATA frame that was
  * sent with @ref LS_FLAG_ACK_REQ.  The MAC layer stamps SRC and FCNT and
- * authenticates the frame with AES-CMAC.
+ * authenticates the frame with AES-CMAC using @p dst's current session key.
  *
  * @param ctx  LoRa Star context.
  * @param dst  Destination short address (usually the node that sent the DATA).
- * @return 0 on success, negative errno on failure.
+ * @return 0 on success, -ENOTCONN if @p dst has no active session,
+ *         negative errno on other failures.
  */
 int ls_send_ack(struct ls_ctx *ctx, uint16_t dst);
 
@@ -350,13 +397,20 @@ typedef void (*ls_send_cb)(int ret, void *user_data);
  *
  * - DATA / ACK: stamps FCNT from @p ctx->fcnt (pre-increment, so the first
  *   value sent is 1), AES-128-CTR encrypts the payload, then AES-CMAC signs
- *   the frame.  Pass NULL for @p key to use @p ctx->network_key.
+ *   the frame.  Pass NULL for @p key to sign/encrypt with @p dst's current
+ *   session key, resolved automatically (the node's own session key when
+ *   sending to the coordinator, or the addressed node's session key when
+ *   the coordinator is sending) — fails with -ENOTCONN if no session is
+ *   active yet for that peer.
  *
- * - JOIN_ACCEPT: stamps FCNT from @p ctx->fcnt (pre-increment), then
- *   AES-CMAC signs the frame with @p key.  No encryption.
+ * - JOIN_ACCEPT / REJOIN_ACCEPT: stamps FCNT from @p ctx->fcnt
+ *   (pre-increment), then AES-CMAC signs the frame with @p key, which must
+ *   be supplied explicitly (there is no destination session to resolve yet
+ *   — that is what these frames are establishing).  No encryption.
  *
- * - JOIN_REQ: leaves FCNT at 0 (caller convention), then AES-CMAC signs
- *   the frame with @p key.  No encryption.
+ * - JOIN_REQ / REJOIN_REQ: leaves FCNT at 0 (caller convention), then
+ *   AES-CMAC signs the frame with @p key (also required explicitly).  No
+ *   encryption.
  *
  * @p src, @p dst, and @p flags are written into the frame header verbatim.
  * Pass @p ctx->own_addr as @p src for DATA and ACK frames.
@@ -368,9 +422,9 @@ typedef void (*ls_send_cb)(int ret, void *user_data);
  * @param flags       Frame flags byte (combination of LS_FLAG_* constants).
  * @param payload     Payload buffer, or NULL when @p payload_len is 0.
  * @param payload_len Payload length in bytes (0 to @ref LS_MAX_PAYLOAD_SIZE).
- * @param key         Signing/encryption key.  NULL falls back to
- *                    @p ctx->network_key (valid only for DATA and ACK);
- *                    must be non-NULL for JOIN frames.
+ * @param key         Signing/encryption key.  NULL resolves @p dst's session
+ *                    key automatically (valid only for DATA and ACK); must
+ *                    be non-NULL for JOIN/REJOIN frames.
  * @param want_resp   When true, arm the retry timer and wait for a response.
  * @param resp_type   Expected response frame type; ignored when !want_resp.
  * @param resp_src    Expected response source address (@ref LS_BCAST_ADDR matches any).
@@ -380,6 +434,7 @@ typedef void (*ls_send_cb)(int ret, void *user_data);
  *                    May be NULL.
  * @param user_data   Forwarded to @p done_cb.
  * @return 0 if the event was enqueued, -ENOMEM if the TX queue is full,
+ *         -ENOTCONN if @p key is NULL and @p dst has no active session,
  *         -EINVAL on invalid arguments.
  */
 int ls_send_async(struct ls_ctx *ctx,

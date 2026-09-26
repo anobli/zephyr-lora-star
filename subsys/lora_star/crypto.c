@@ -31,9 +31,10 @@
  *   [6..15] 0x00                 — padding to fill the 128-bit nonce
  *
  * Uniqueness guarantee: as long as (FCNT, SRC) never repeats for a given
- * session key, the nonce never repeats and CTR remains secure.  Frame counter
- * monotonicity (enforced by FCNT persistence and FCNT_REBOOT_INCREMENT) is
- * the mechanism that upholds this property.
+ * session key, the nonce never repeats and CTR remains secure.  FCNT is
+ * strictly monotonic within a session and every session uses a fresh key
+ * (see the rejoin handshake), so this holds without needing FCNT itself to
+ * survive a reboot.
  *
  * The caller's buffer is overwritten with the encrypted (or decrypted) bytes.
  */
@@ -111,6 +112,71 @@ int ls_crypto_ctr(uint8_t *buf, size_t len, const uint8_t key[LS_NETWORK_KEY_SIZ
 out:
 	psa_cipher_abort(&op);
 	psa_destroy_key(key_id);
+	return (st == PSA_SUCCESS) ? 0 : -EIO;
+}
+
+/*
+ * HKDF-SHA256 (RFC 5869), two-step extract-then-expand:
+ *   Extract: PRK = HMAC-SHA256(salt, IKM)
+ *   Expand:  output = first LS_NETWORK_KEY_SIZE bytes of HMAC-SHA256(PRK, info)
+ *
+ * Generic derivation shared by the pairing and rejoin handshakes, each of
+ * which supplies a different secret as IKM (an ECDH shared secret, or the
+ * long-term network key) and different salt/info to keep the outputs of the
+ * two protocols from ever coinciding.
+ */
+int ls_crypto_hkdf(const uint8_t *ikm, size_t ikm_len,
+		   const uint8_t *salt, size_t salt_len,
+		   const uint8_t *info, size_t info_len,
+		   uint8_t key[LS_NETWORK_KEY_SIZE])
+{
+	psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
+	psa_key_id_t ikm_id = PSA_KEY_ID_NULL;
+	psa_key_derivation_operation_t op = PSA_KEY_DERIVATION_OPERATION_INIT;
+	psa_status_t st;
+
+	/*
+	 * PSA requires the HKDF secret (IKM) to be a key handle, not raw
+	 * bytes.  Importing as KEY_TYPE_DERIVE enforces that it never leaves
+	 * PSA as application-visible bytes via this path.
+	 */
+	psa_set_key_type(&attr, PSA_KEY_TYPE_DERIVE);
+	psa_set_key_bits(&attr, ikm_len * 8);
+	psa_set_key_usage_flags(&attr, PSA_KEY_USAGE_DERIVE);
+	psa_set_key_algorithm(&attr, PSA_ALG_HKDF(PSA_ALG_SHA_256));
+
+	st = psa_import_key(&attr, ikm, ikm_len, &ikm_id);
+	if (st != PSA_SUCCESS) {
+		return -EIO;
+	}
+
+	st = psa_key_derivation_setup(&op, PSA_ALG_HKDF(PSA_ALG_SHA_256));
+	if (st != PSA_SUCCESS) {
+		goto out;
+	}
+
+	st = psa_key_derivation_input_bytes(&op, PSA_KEY_DERIVATION_INPUT_SALT,
+					    salt, salt_len);
+	if (st != PSA_SUCCESS) {
+		goto out;
+	}
+
+	st = psa_key_derivation_input_key(&op, PSA_KEY_DERIVATION_INPUT_SECRET, ikm_id);
+	if (st != PSA_SUCCESS) {
+		goto out;
+	}
+
+	st = psa_key_derivation_input_bytes(&op, PSA_KEY_DERIVATION_INPUT_INFO,
+					    info, info_len);
+	if (st != PSA_SUCCESS) {
+		goto out;
+	}
+
+	st = psa_key_derivation_output_bytes(&op, key, LS_NETWORK_KEY_SIZE);
+
+out:
+	psa_key_derivation_abort(&op);
+	psa_destroy_key(ikm_id);
 	return (st == PSA_SUCCESS) ? 0 : -EIO;
 }
 

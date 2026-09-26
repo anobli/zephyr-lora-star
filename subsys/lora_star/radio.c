@@ -12,9 +12,9 @@ LOG_MODULE_REGISTER(ls_radio, CONFIG_LORA_STAR_LOG_LEVEL);
 static struct lora_modem_config radio_rx_cfg = {
 	.frequency    = CONFIG_LORA_STAR_FREQUENCY,
 	.bandwidth    = BW_125_KHZ,
-	.datarate     = SF_7,
-	.coding_rate  = CR_4_5,
-	.preamble_len = 8,
+	.datarate     = SF_12,
+	.coding_rate  = CR_4_8,
+	.preamble_len = 12,
 	.tx_power     = CONFIG_LORA_STAR_TX_POWER_DBM,
 	.tx           = false,
 };
@@ -22,9 +22,9 @@ static struct lora_modem_config radio_rx_cfg = {
 static struct lora_modem_config radio_tx_cfg = {
 	.frequency    = CONFIG_LORA_STAR_FREQUENCY,
 	.bandwidth    = BW_125_KHZ,
-	.datarate     = SF_7,
-	.coding_rate  = CR_4_5,
-	.preamble_len = 8,
+	.datarate     = SF_12,
+	.coding_rate  = CR_4_8,
+	.preamble_len = 12,
 	.tx_power     = CONFIG_LORA_STAR_TX_POWER_DBM,
 	.tx           = true,
 };

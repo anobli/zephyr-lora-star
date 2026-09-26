@@ -96,11 +96,14 @@ int ls_coord_init(struct ls_ctx *ctx);
 /**
  * @brief Anti-replay check for a coordinator uplink (DATA/ACK from a node).
  *
- * Looks up @p src's persisted @c fcnt_last, rejects unknown senders (no
- * entry in the node table — see @ref ls_coord_add_node()) and non-increasing
- * frame counters, and persists the new checkpoint on acceptance.  Called
- * from the shared RX path in @c lora_star.c for every accepted DATA/ACK
- * frame when @c CONFIG_LORA_STAR_COORDINATOR is enabled.
+ * Compares @p fcnt against @p src's in-RAM @c session_fcnt_last (reset to 0
+ * every time @ref ls_coord_set_session() installs a fresh session key for
+ * that node) and rejects unknown senders and non-increasing frame counters.
+ * Nothing is persisted — a captured frame from a previous session fails MIC
+ * verification under the node's new session key before this check ever
+ * runs, so freshness comes from key rotation, not a saved checkpoint.
+ * Called from the shared RX path in @c lora_star.c for every accepted
+ * DATA/ACK frame when @c CONFIG_LORA_STAR_COORDINATOR is enabled.
  *
  * @param ctx   LoRa Star context.
  * @param src   Source address the frame claims to be from.
@@ -108,6 +111,46 @@ int ls_coord_init(struct ls_ctx *ctx);
  * @return true to accept the frame, false to drop it as a replay.
  */
 bool ls_coord_replay_check(struct ls_ctx *ctx, uint16_t src, uint32_t fcnt);
+
+/**
+ * @brief Look up a node's current session key.
+ *
+ * @param short_addr  Node short address.
+ * @return Pointer to the node's session key, or NULL if the address is
+ *         unknown or has no active session (see @ref ls_coord_set_session()).
+ */
+const uint8_t *ls_coord_get_session_key(uint16_t short_addr);
+
+/**
+ * @brief Install a freshly established session for a node.
+ *
+ * Called by the rejoin handshake once a node has proven it holds the
+ * network key. Records @p session_key, resets the node's anti-replay
+ * checkpoint to 0, and marks the session active. Never persisted — the
+ * whole point of a session key is that it is fresh RAM-only state that
+ * disappears on either side's reboot.
+ *
+ * @param short_addr   Node short address; must already exist in the table
+ *                     (see @ref ls_coord_add_node()).
+ * @param session_key  Freshly derived session key, @ref LS_NETWORK_KEY_SIZE bytes.
+ */
+void ls_coord_set_session(uint16_t short_addr, const uint8_t session_key[LS_NETWORK_KEY_SIZE]);
+
+/**
+ * @brief Rate-gate a SESSION_UNKNOWN notice for a node.
+ *
+ * Called from the MAC RX path (see @c mac.c) when a DATA/ACK frame claiming
+ * to be from @p short_addr cannot be verified (no active session). Returns
+ * true at most once per @c CONFIG_LORA_STAR_SESSION_UNKNOWN_COOLDOWN_MS for a
+ * given, already-known node, and updates that node's timestamp as a side
+ * effect when it does. Always false for an address with no table entry, so
+ * this can't be used to make the coordinator respond to arbitrary spoofed
+ * addresses.
+ *
+ * @param short_addr  Address the unverifiable frame claims to be from.
+ * @return true if a SESSION_UNKNOWN notice should be sent now, false otherwise.
+ */
+bool ls_coord_notify_allowed(uint16_t short_addr);
 
 #else /* !CONFIG_LORA_STAR_COORDINATOR */
 
@@ -120,6 +163,24 @@ static inline bool ls_coord_replay_check(struct ls_ctx *ctx, uint16_t src, uint3
 	ARG_UNUSED(src);
 	ARG_UNUSED(fcnt);
 	return true;
+}
+
+/* Coordinator role not built — never called by mac.c's key resolution, but
+ * keeps that dispatch free of #ifdef.
+ */
+static inline const uint8_t *ls_coord_get_session_key(uint16_t short_addr)
+{
+	ARG_UNUSED(short_addr);
+	return NULL;
+}
+
+/* Coordinator role not built — never called by mac.c's RX path, but keeps
+ * that dispatch free of #ifdef.
+ */
+static inline bool ls_coord_notify_allowed(uint16_t short_addr)
+{
+	ARG_UNUSED(short_addr);
+	return false;
 }
 
 #endif /* CONFIG_LORA_STAR_COORDINATOR */

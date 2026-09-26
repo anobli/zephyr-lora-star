@@ -6,9 +6,9 @@
 #include <lora_star/mac.h>
 #include <lora_star/radio.h>
 #include <lora_star/crypto.h>
+#include <lora_star/coord.h>
 
 #include "event.h"
-#include "storage.h"
 
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(ls_mac, CONFIG_LORA_STAR_LOG_LEVEL);
@@ -18,9 +18,24 @@ int ls_mac_init(struct ls_ctx *ctx)
 	return ls_radio_init(ctx->radio_dev);
 }
 
+/*
+ * Resolves the key to use for verifying/decrypting a received DATA/ACK
+ * frame claiming to be from src: the node's own session key when src is
+ * the coordinator, or that node's session key when this is the coordinator
+ * receiving from src. NULL if src has no active session — replay-proofing
+ * a stale or forged session comes from there being no valid key to
+ * authenticate against, not from a saved counter.
+ */
+static const uint8_t *ls_resolve_rx_key(struct ls_ctx *ctx, uint16_t src)
+{
+	if (ctx->own_addr == LS_COORD_ADDR) {
+		return ls_coord_get_session_key(src);
+	}
+	return (src == LS_COORD_ADDR && ctx->_session_active) ? ctx->_session_key : NULL;
+}
+
 int ls_mac_send(struct ls_ctx *ctx, struct ls_frame *frame, const uint8_t *key)
 {
-	const uint8_t *use_key;
 	uint8_t type;
 	int ret;
 
@@ -32,46 +47,34 @@ int ls_mac_send(struct ls_ctx *ctx, struct ls_frame *frame, const uint8_t *key)
 		return -EINVAL;
 	}
 
-	type = ls_frame_get_type(frame);
-
-	if ((type == LS_TYPE_JOIN_REQ || type == LS_TYPE_JOIN_ACCEPT) && !key) {
+	if (key == NULL) {
 		return -EINVAL;
 	}
 
-	if (type == LS_TYPE_DATA || type == LS_TYPE_ACK || type == LS_TYPE_JOIN_ACCEPT) {
+	type = ls_frame_get_type(frame);
+
+	if (type == LS_TYPE_DATA || type == LS_TYPE_ACK ||
+	    type == LS_TYPE_JOIN_ACCEPT || type == LS_TYPE_REJOIN_ACCEPT) {
 		/*
 		 * Pre-increment: FCNT values start at 1, never 0, so the first
-		 * frame from a freshly paired peer (fcnt_last = 0) is always
-		 * accepted by the strict "fcnt > fcnt_last" anti-replay check.
+		 * frame of a fresh session (session_fcnt_last = 0) is always
+		 * accepted by the strict "fcnt > session_fcnt_last" check.
 		 */
 		ls_frame_set_fcnt(frame, ++ctx->fcnt);
-
-		/*
-		 * Flush FCNT to Settings at least every FCNT_REBOOT_INCREMENT
-		 * frames. Without this, a peer's anti-replay checkpoint can run
-		 * far ahead of what a reboot restores (Settings would otherwise
-		 * hold whatever was last saved, e.g. at pairing time), so every
-		 * frame sent after a reboot gets rejected as a replay until FCNT
-		 * climbs back past the peer's last-accepted value.
-		 */
-		if (ctx->fcnt - ctx->_fcnt_saved >= CONFIG_LORA_STAR_FCNT_REBOOT_INCREMENT) {
-			ls_storage_save_fcnt(ctx);
-		}
 	}
 
 	if (type == LS_TYPE_DATA || type == LS_TYPE_ACK) {
-		use_key = key ? key : ctx->network_key;
-		ret = ls_frame_encrypt(frame, use_key);
+		ret = ls_frame_encrypt(frame, key);
 		if (ret) {
 			LOG_ERR("Failed to encrypt the frame");
 			return ret;
 		}
-		ret = ls_frame_sign(frame, use_key);
+		ret = ls_frame_sign(frame, key);
 		if (ret) {
 			LOG_ERR("Failed to sign the frame");
 			return ret;
 		}
-	} else if (key != NULL) {
+	} else {
 		ret = ls_frame_sign(frame, key);
 		if (ret) {
 			LOG_ERR("Failed to sign the frame");
@@ -99,6 +102,8 @@ static void mac_recv_cb(const struct device *dev, uint8_t *data, uint16_t size,
 {
 	struct ls_ctx *ctx = user_data;
 	struct ls_event ev;
+	const uint8_t *key;
+	uint16_t frame_src;
 	uint8_t type;
 	int ret;
 
@@ -118,12 +123,32 @@ static void mac_recv_cb(const struct device *dev, uint8_t *data, uint16_t size,
 	type = ls_frame_get_type(&ev.rx);
 
 	if (type == LS_TYPE_DATA || type == LS_TYPE_ACK) {
-		ret = ls_frame_check_signature(&ev.rx, ctx->network_key);
+		frame_src = ls_frame_get_src(&ev.rx);
+		key = ls_resolve_rx_key(ctx, frame_src);
+		if (!key) {
+			LOG_WRN("No active session for 0x%04x, dropping frame", frame_src);
+			/*
+			 * Only the coordinator replies, and only for a node it
+			 * already knows about (ls_coord_notify_allowed() also
+			 * rate-limits) — an unrecognised address gets nothing,
+			 * so this can't be used to make the coordinator chatter
+			 * back to arbitrary spoofed addresses.
+			 */
+			if (ctx->own_addr == LS_COORD_ADDR && ls_coord_notify_allowed(frame_src)) {
+				(void)ls_send_async(ctx, LS_TYPE_SESSION_UNKNOWN,
+						    LS_COORD_ADDR, frame_src, 0,
+						    NULL, 0, ctx->network_key,
+						    false, 0, 0, 0, NULL, NULL);
+			}
+			return;
+		}
+
+		ret = ls_frame_check_signature(&ev.rx, key);
 		if (ret) {
 			LOG_WRN("MIC check failed, dropping frame");
 			return;
 		}
-		ret = ls_frame_decrypt(&ev.rx, ctx->network_key);
+		ret = ls_frame_decrypt(&ev.rx, key);
 		if (ret) {
 			LOG_WRN("Decryption failed, dropping frame");
 			return;

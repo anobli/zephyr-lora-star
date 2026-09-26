@@ -35,10 +35,14 @@
 #define LS_ADDR_MAX   0xFFFEU /**< Maximum valid node address */
 
 /* Frame types */
-#define LS_TYPE_JOIN_REQ    0x01U /**< Pairing request from node */
-#define LS_TYPE_JOIN_ACCEPT 0x02U /**< Pairing response from coordinator */
-#define LS_TYPE_DATA        0x03U /**< Application data frame */
-#define LS_TYPE_ACK         0x04U /**< Acknowledgement frame */
+#define LS_TYPE_JOIN_REQ      0x01U /**< Pairing request from node */
+#define LS_TYPE_JOIN_ACCEPT   0x02U /**< Pairing response from coordinator */
+#define LS_TYPE_DATA          0x03U /**< Application data frame */
+#define LS_TYPE_ACK           0x04U /**< Acknowledgement frame */
+#define LS_TYPE_REJOIN_REQ    0x05U /**< Session (re)establishment request from an already-keyed node */
+#define LS_TYPE_REJOIN_ACCEPT 0x06U /**< Session (re)establishment response from coordinator */
+#define LS_TYPE_SESSION_UNKNOWN 0x07U /**< Coordinator notice: DATA/ACK rejected, sender should rejoin */
+#define LS_TYPE_COORD_HELLO     0x08U /**< Coordinator boot broadcast: all nodes should rejoin */
 
 /* FLAGS bits */
 #define LS_FLAG_ACK_REQ     BIT(0) /**< Sender requests an ACK */
@@ -166,9 +170,9 @@ uint16_t ls_frame_get_dst(struct ls_frame *frame);
 /**
  * @brief Set the frame counter.
  *
- * The frame counter must be strictly monotonic per sender and must persist
- * across reboots (add @c FCNT_REBOOT_INCREMENT after a restore) to prevent
- * replay attacks.
+ * The frame counter must be strictly monotonic per sender within a session.
+ * Replay protection across reboots comes from the session key changing on
+ * every rejoin (see lora_star/rejoin.h), not from FCNT itself persisting.
  * @param frame Pointer to the frame.
  * @param fcnt  Frame counter value to write.
  */

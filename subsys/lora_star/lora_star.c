@@ -16,6 +16,10 @@
 #include <lora_star/mac.h>
 #include <lora_star/radio.h>
 #include <lora_star/coord.h>
+#include <lora_star/rejoin.h>
+#ifdef CONFIG_LORA_STAR_NODE
+#include <zephyr/drivers/hwinfo.h>
+#endif
 
 #include "storage.h"
 #include "event.h"
@@ -98,9 +102,10 @@ struct ls_ctx *ls_init(const struct device *lora_dev)
 	memset(ctx->network_key, 0, sizeof(ctx->network_key));
 	memset(ctx->_handlers, 0, sizeof(ctx->_handlers));
 
-	ctx->_msgq         = &ls_msgq;
-	ctx->_rx_fcnt_last = 0;
-	ctx->_fcnt_saved   = 0;
+	ctx->_msgq            = &ls_msgq;
+	ctx->_session_rx_fcnt = 0;
+	ctx->_session_active  = false;
+	memset(ctx->_session_key, 0, sizeof(ctx->_session_key));
 	k_mutex_init(&ctx->_handlers_lock);
 
 	ret = ls_mac_init(ctx);
@@ -114,9 +119,7 @@ struct ls_ctx *ls_init(const struct device *lora_dev)
 		goto done;
 	}
 
-	ls_storage_load_fcnt(ctx);
 	ls_storage_load_network_key(ctx);
-	ls_storage_load_rx_fcnt(ctx);
 
 #ifdef CONFIG_LORA_STAR_DEFAULT_NETWORK_KEY
 	if (!ctx->network_key_found) {
@@ -126,10 +129,25 @@ struct ls_ctx *ls_init(const struct device *lora_dev)
 
 	ret = ls_storage_load_addr(ctx);
 	if (ret == 0 && ctx->addr_found) {
-		ctx->fcnt += CONFIG_LORA_STAR_FCNT_REBOOT_INCREMENT;
-		ls_storage_save_fcnt(ctx);
 		LOG_INF("Session restored — ShortAddr 0x%04x", ctx->own_addr);
 	}
+
+#ifdef CONFIG_LORA_STAR_NODE
+	ret = ls_rejoin_node_init(ctx);
+	if (ret < 0) {
+		LOG_WRN("Session-recovery handlers failed to register: %d", ret);
+	}
+
+	if (ls_is_paired(ctx)) {
+		uint8_t dev_eui[LS_DEV_EUI_SIZE];
+
+		hwinfo_get_device_id(dev_eui, sizeof(dev_eui));
+		ret = ls_rejoin_start(ctx, dev_eui, NULL, NULL);
+		if (ret < 0) {
+			LOG_WRN("Automatic rejoin failed to start: %d", ret);
+		}
+	}
+#endif
 
 done:
 	k_thread_start(ls_tid);
@@ -171,14 +189,18 @@ int ls_init_coord(struct ls_ctx *ctx)
 	}
 #endif
 
-	ctx->fcnt += CONFIG_LORA_STAR_FCNT_REBOOT_INCREMENT;
-	ls_storage_save_fcnt(ctx);
 	ls_set_own_addr(ctx, LS_COORD_ADDR);
 	ctx->always_on_rx = true;
 
 	ret = ls_coord_init(ctx);
 	if (ret < 0) {
 		LOG_ERR("ls_coord_init failed: %d", ret);
+		return ret;
+	}
+
+	ret = ls_rejoin_coord_init(ctx);
+	if (ret < 0) {
+		LOG_ERR("ls_rejoin_coord_init failed: %d", ret);
 		return ret;
 	}
 
@@ -191,12 +213,11 @@ int ls_init_coord(struct ls_ctx *ctx)
 #ifdef CONFIG_LORA_STAR_NODE
 static bool ls_node_replay_check(struct ls_ctx *ctx, uint16_t src, uint32_t fcnt)
 {
-	if (src != LS_COORD_ADDR || fcnt <= ctx->_rx_fcnt_last) {
+	if (!ctx->_session_active || src != LS_COORD_ADDR || fcnt <= ctx->_session_rx_fcnt) {
 		return false;
 	}
 
-	ctx->_rx_fcnt_last = fcnt;
-	ls_storage_save_rx_fcnt(ctx);
+	ctx->_session_rx_fcnt = fcnt;
 	return true;
 }
 #else /* !CONFIG_LORA_STAR_NODE */
@@ -223,6 +244,11 @@ bool ls_is_paired(const struct ls_ctx *ctx)
 {
 	return ls_is_network_key_set(ctx) &&
 	       ctx->own_addr != LS_COORD_ADDR;
+}
+
+bool ls_is_session_active(const struct ls_ctx *ctx)
+{
+	return ctx->_session_active;
 }
 
 void ls_set_network_key(struct ls_ctx *ctx, const uint8_t key[LS_NETWORK_KEY_SIZE])
@@ -521,13 +547,33 @@ static void ls_thread_fn(void *p1, void *p2, void *p3)
  * Public send API
  * ------------------------------------------------------------------------- */
 
+/*
+ * Resolves the key to use for an outgoing DATA/ACK frame addressed to dst:
+ * the node's own session key when sending to the coordinator, or that
+ * node's session key when the coordinator is sending. NULL if dst has no
+ * active session yet. Mirrors ls_replay_check()'s own_addr-based dispatch.
+ */
+static const uint8_t *ls_resolve_tx_key(struct ls_ctx *ctx, uint16_t dst)
+{
+	if (ctx->own_addr == LS_COORD_ADDR) {
+		return ls_coord_get_session_key(dst);
+	}
+	return ctx->_session_active ? ctx->_session_key : NULL;
+}
+
 int ls_send_ack(struct ls_ctx *ctx, uint16_t dst)
 {
 	struct ls_frame frame;
+	const uint8_t *key;
+
+	key = ls_resolve_tx_key(ctx, dst);
+	if (!key) {
+		return -ENOTCONN;
+	}
 
 	ls_frame_build(&frame, LS_TYPE_ACK, ctx->own_addr, dst, 0);
 
-	return ls_mac_send(ctx, &frame, NULL);
+	return ls_mac_send(ctx, &frame, key);
 }
 
 /*
@@ -588,6 +634,13 @@ int ls_send_async(struct ls_ctx *ctx,
 		return -EINVAL;
 	}
 
+	if (!key) {
+		key = ls_resolve_tx_key(ctx, dst);
+		if (!key) {
+			return -ENOTCONN;
+		}
+	}
+
 	ev.type = LS_EVENT_TX;
 	ls_frame_build(&ev.tx.frame, type, src, dst, flags);
 	if (payload_len > 0) {
@@ -596,7 +649,7 @@ int ls_send_async(struct ls_ctx *ctx,
 			return ret;
 		}
 	}
-	memcpy(ev.tx.key, key ? key : ctx->network_key, LS_NETWORK_KEY_SIZE);
+	memcpy(ev.tx.key, key, LS_NETWORK_KEY_SIZE);
 	ev.tx.want_resp  = want_resp;
 	ev.tx.resp_type  = resp_type;
 	ev.tx.resp_src   = resp_src;

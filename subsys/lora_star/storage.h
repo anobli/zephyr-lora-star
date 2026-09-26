@@ -19,14 +19,6 @@
 int ls_storage_init(void);
 
 /**
- * @brief Load the TX frame counter from Settings into @p ctx->fcnt.
- *
- * @param ctx  LoRa Star context.
- * @return 0 on success, negative errno on failure.
- */
-int ls_storage_load_fcnt(struct ls_ctx *ctx);
-
-/**
  * @brief Load the network key from Settings into @p ctx->network_key.
  *
  * Sets @p ctx->network_key_found if the key was stored.
@@ -47,48 +39,18 @@ int ls_storage_load_network_key(struct ls_ctx *ctx);
 int ls_storage_load_addr(struct ls_ctx *ctx);
 
 /**
- * @brief Load the last-accepted RX frame counter into @p ctx->_rx_fcnt_last.
- *
- * Used by the node role to restore the anti-replay checkpoint for frames
- * received from the coordinator. Defaults to 0 if never stored.
- *
- * @param ctx  LoRa Star context.
- * @return 0 on success, negative errno on failure.
- */
-int ls_storage_load_rx_fcnt(struct ls_ctx *ctx);
-
-/**
- * @brief Save @p ctx->_rx_fcnt_last to Settings.
- *
- * @param ctx  LoRa Star context.
- * @return 0 on success, negative errno on failure.
- */
-int ls_storage_save_rx_fcnt(struct ls_ctx *ctx);
-
-/**
  * @brief Load all common persistent state into @p ctx.
  *
  * Populates @p ctx->own_addr (sets @p ctx->addr_found if a stored address is
- * found), @p ctx->fcnt, and @p ctx->network_key (sets @p ctx->network_key_found
- * if a stored key is found).
+ * found) and @p ctx->network_key (sets @p ctx->network_key_found if a stored
+ * key is found). FCNT and session state are never persisted — see
+ * lora_star/rejoin.h.
  *
  * @param ctx  LoRa Star context.
  * @return 0 on success, -ENOENT if no address is stored (node never paired),
  *         negative errno on other failures.
  */
 int ls_storage_load_all(struct ls_ctx *ctx);
-
-/**
- * @brief Save @p ctx->fcnt to Settings.
- *
- * Also updates @p ctx->_fcnt_saved to @p ctx->fcnt on success, so callers
- * that gate saves on the delta between the two (see @c ls_mac_send()) see
- * the gap close immediately.
- *
- * @param ctx  LoRa Star context.
- * @return 0 on success, negative errno on failure.
- */
-int ls_storage_save_fcnt(struct ls_ctx *ctx);
 
 /**
  * @brief Save @p ctx->network_key to Settings.
@@ -99,7 +61,7 @@ int ls_storage_save_fcnt(struct ls_ctx *ctx);
 int ls_storage_save_network_key(struct ls_ctx *ctx);
 
 /**
- * @brief Save @p ctx->own_addr, @p ctx->fcnt, and @p ctx->network_key to Settings.
+ * @brief Save @p ctx->own_addr and @p ctx->network_key to Settings.
  *
  * @param ctx  LoRa Star context.
  * @return 0 on success, negative errno on first failure.
@@ -121,11 +83,11 @@ typedef void (*ls_storage_node_load_cb)(uint16_t short_addr,
 /**
  * @brief Load coordinator persistent state.
  *
- * Populates @p ctx->fcnt and @p ctx->network_key (sets @p ctx->network_key_found)
- * from common storage.  Populates @p next_addr from coordinator storage.
- * Invokes @p cb for every persisted node record.
+ * Populates @p next_addr from coordinator storage and invokes @p cb for
+ * every persisted node record. Does not touch common storage (own_addr,
+ * network key) — see @ref ls_storage_load_all() for that.
  *
- * @param ctx        LoRa Star context.
+ * @param ctx        LoRa Star context (reserved, not used).
  * @param next_addr  Receives the next ShortAddr to assign; defaults to LS_ADDR_MIN.
  * @param cb         Called for every persisted node record; may be NULL.
  * @param user_data  Forwarded to @p cb.

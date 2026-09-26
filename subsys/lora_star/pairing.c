@@ -18,6 +18,7 @@
 #include <lora_star/mac.h>
 #include <lora_star/crypto.h>
 #include <lora_star/coord.h>
+#include <lora_star/rejoin.h>
 #include <lora_star/pairing.h>
 
 #include "storage.h"
@@ -145,7 +146,9 @@ static int pairing_ecdh_shared(const uint8_t priv[LS_PUBKEY_SIZE],
  * This key is used exclusively for the JOIN_ACCEPT exchange: it encrypts the
  * short address and network key via AES-CTR, and authenticates the frame via
  * AES-CMAC.  It is discarded after pairing; the network key recovered from
- * the JOIN_ACCEPT is what the node uses for all subsequent DATA/ACK frames.
+ * the JOIN_ACCEPT only bootstraps the rejoin handshake (see
+ * lora_star/rejoin.h), which is what actually derives the session key used
+ * for DATA/ACK frames.
  *
  * HKDF construction:
  *   Extract: PRK = HMAC-SHA256(salt=DevEUI||Nonce, IKM=shared_secret)
@@ -164,59 +167,12 @@ static int pairing_hkdf_pairing_key(const uint8_t shared[LS_PUBKEY_SIZE],
 {
 	uint8_t salt[LS_DEV_EUI_SIZE + LS_NONCE_SIZE];
 	const uint8_t info[] = "lora_star_v1";
-	psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
-	psa_key_id_t ikm_id = PSA_KEY_ID_NULL;
-	psa_key_derivation_operation_t op = PSA_KEY_DERIVATION_OPERATION_INIT;
-	psa_status_t st;
 
 	memcpy(salt, dev_eui, LS_DEV_EUI_SIZE);
 	memcpy(salt + LS_DEV_EUI_SIZE, nonce, LS_NONCE_SIZE);
 
-	/*
-	 * PSA requires the HKDF secret (IKM) to be a key handle, not raw
-	 * bytes.  Importing as KEY_TYPE_DERIVE enforces that the raw shared
-	 * secret never leaves PSA as application-visible bytes via this path.
-	 */
-	psa_set_key_type(&attr, PSA_KEY_TYPE_DERIVE);
-	psa_set_key_bits(&attr, LS_PUBKEY_SIZE * 8);
-	psa_set_key_usage_flags(&attr, PSA_KEY_USAGE_DERIVE);
-	psa_set_key_algorithm(&attr, PSA_ALG_HKDF(PSA_ALG_SHA_256));
-
-	st = psa_import_key(&attr, shared, LS_PUBKEY_SIZE, &ikm_id);
-	if (st != PSA_SUCCESS) {
-		return -EIO;
-	}
-
-	st = psa_key_derivation_setup(&op, PSA_ALG_HKDF(PSA_ALG_SHA_256));
-	if (st != PSA_SUCCESS) {
-		goto out;
-	}
-
-	/* HKDF extract step: salt binds PRK to this device and pairing attempt. */
-	st = psa_key_derivation_input_bytes(&op, PSA_KEY_DERIVATION_INPUT_SALT,
-					    salt, sizeof(salt));
-	if (st != PSA_SUCCESS) {
-		goto out;
-	}
-
-	st = psa_key_derivation_input_key(&op, PSA_KEY_DERIVATION_INPUT_SECRET, ikm_id);
-	if (st != PSA_SUCCESS) {
-		goto out;
-	}
-
-	/* HKDF expand step: info provides protocol-level domain separation. */
-	st = psa_key_derivation_input_bytes(&op, PSA_KEY_DERIVATION_INPUT_INFO,
-					    info, sizeof(info) - 1);
-	if (st != PSA_SUCCESS) {
-		goto out;
-	}
-
-	st = psa_key_derivation_output_bytes(&op, key, LS_NETWORK_KEY_SIZE);
-
-out:
-	psa_key_derivation_abort(&op);
-	psa_destroy_key(ikm_id);
-	return (st == PSA_SUCCESS) ? 0 : -EIO;
+	return ls_crypto_hkdf(shared, LS_PUBKEY_SIZE, salt, sizeof(salt),
+			      info, sizeof(info) - 1, key);
 }
 
 /* --------------------------------------------------------------------------
@@ -239,14 +195,6 @@ static void pairing_close_work_handler(struct k_work *work)
 		CONTAINER_OF(work, struct ls_coord_pairing_ctx, _close_work.work);
 
 	pairing_close_window(pair_ctx);
-}
-
-static void pairing_join_accept_sent_cb(int ret, void *user_data)
-{
-	struct ls_ctx *ctx = user_data;
-
-	ARG_UNUSED(ret);
-	ls_storage_save_fcnt(ctx);
 }
 
 static int pairing_join_req_cb(struct ls_ctx *ctx, struct ls_frame *frame,
@@ -356,7 +304,7 @@ static int pairing_join_req_cb(struct ls_ctx *ctx, struct ls_frame *frame,
 			    (const uint8_t *)&ja, LS_JOIN_ACCEPT_PAYLOAD_SIZE,
 			    pairing_key,
 			    false, 0, 0, 0,
-			    pairing_join_accept_sent_cb, ctx);
+			    NULL, NULL);
 	memset(pairing_key, 0, sizeof(pairing_key));
 	if (ret < 0) {
 		LOG_ERR("JOIN_ACCEPT enqueue failed");
@@ -523,8 +471,11 @@ fail:
 /*
  * Called by the LoRa Star thread after a JOIN_ACCEPT was received and
  * dispatched (ret=0), or after all retries are exhausted (ret=-ETIMEDOUT),
- * or after a hard send failure (ret<0).  Delivers the final result to the
- * application via pair_ctx->done_cb.
+ * or after a hard send failure (ret<0).  On success, immediately starts the
+ * rejoin handshake to turn the freshly received network key into a working
+ * session (see lora_star/rejoin.h) — pairing alone only gets the node the
+ * long-term key, not a session DATA/ACK traffic can use.  Delivers the final
+ * pairing result to the application via pair_ctx->done_cb.
  */
 static void pairing_node_done_cb(int ret, void *user_data)
 {
@@ -533,6 +484,14 @@ static void pairing_node_done_cb(int ret, void *user_data)
 
 	ls_unregister_frame_cb(pair_ctx->_ctx, pair_ctx->_join_accept_hdl);
 	pair_ctx->_join_accept_hdl = NULL;
+
+	if (result == 0) {
+		int rejoin_ret = ls_rejoin_start(pair_ctx->_ctx, pair_ctx->dev_eui, NULL, NULL);
+
+		if (rejoin_ret < 0) {
+			LOG_WRN("Automatic rejoin failed to start: %d", rejoin_ret);
+		}
+	}
 
 	if (pair_ctx->done_cb) {
 		pair_ctx->done_cb(pair_ctx->_ctx, result, pair_ctx->done_user_data);

@@ -139,6 +139,33 @@ config LORA_STAR_MAX_NODES
 	help
 	  Size of the in-RAM node table.  Each entry is ~30 bytes.
 
+config LORA_STAR_COORD_HELLO_COUNT
+	int "Number of boot HELLO broadcasts (coordinator)"
+	default 3
+	depends on LORA_STAR_COORDINATOR
+	help
+	  On startup the coordinator broadcasts a network-key-signed HELLO this
+	  many times so an already-paired node currently listening learns its
+	  session is gone and re-runs the rejoin handshake (see
+	  lora_star/rejoin.h). Best-effort: a node that is asleep or
+	  duty-cycled at boot time won't see it — it recovers instead the next
+	  time it transmits and gets a SESSION_UNKNOWN notice back.
+
+config LORA_STAR_COORD_HELLO_INTERVAL_MS
+	int "Delay between boot HELLO broadcasts (ms)"
+	default 2000
+	depends on LORA_STAR_COORDINATOR
+
+config LORA_STAR_SESSION_UNKNOWN_COOLDOWN_MS
+	int "Minimum time between SESSION_UNKNOWN notices to the same node (ms)"
+	default 5000
+	depends on LORA_STAR_COORDINATOR
+	help
+	  Rate-limits the coordinator's reactive "no active session, please
+	  rejoin" notice sent when a known node's DATA/ACK cannot be verified
+	  (see lora_star/rejoin.h). Bounds how often a spoofed SRC address can
+	  force a legitimate node into repeated rejoin traffic.
+
 config LORA_STAR_ACK_GUARD_MS
 	int "Guard time added to the ACK timeout on top of computed airtime (ms)"
 	default 100
@@ -154,17 +181,6 @@ config LORA_STAR_TX_MAX_RETRIES
 config LORA_STAR_TX_RETRY_BACKOFF_MS
 	int "Base backoff between retries (ms); uniform jitter [0,base) added"
 	default 500
-
-config LORA_STAR_FCNT_REBOOT_INCREMENT
-	int "Frame counter guard increment on reboot"
-	default 32
-	help
-	  After a reboot, FCNT is restored from Settings then incremented by
-	  this value to account for frames sent before the last save. FCNT is
-	  also flushed to Settings every time it advances by this many counts
-	  (see ls_mac_send()), so the two uses must share one value: the save
-	  threshold bounds how far FCNT can be ahead of the persisted value at
-	  any moment, and the reboot guard must cover exactly that same gap.
 
 config LORA_STAR_FREQUENCY
 	int "LoRa carrier frequency (Hz)"
