@@ -12,7 +12,12 @@
  *   CONFIG_LORA_STAR_LINK_TEST_NODE=y          →  ACKs every DATA received
  *
  * Both roles use the devicetree-configured pairing button (SW0) to trigger
- * pairing; see subsys/lora_star/pairing_button.c.
+ * pairing; see subsys/lora_star/pairing_button.c. Pairing only hands the
+ * node the long-term network key — ls_init() then automatically runs the
+ * rejoin handshake (lora_star/rejoin.h) to establish the session key
+ * DATA/ACK traffic actually uses, and re-runs it on every reboot. Expect a
+ * short window after boot/pairing where sends fail with -ENOTCONN until
+ * that completes.
  *
  * Coordinator behaviour:
  *   Every PERIOD_S, sends a DATA frame with ACK_REQ to the paired node.  On
