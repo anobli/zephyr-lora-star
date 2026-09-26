@@ -51,6 +51,10 @@ ZTEST(lora_star_mac, test_ls_mac_init)
 
 ZTEST(lora_star_mac, test_ls_mac_send)
 {
+	static const uint8_t key[LS_NETWORK_KEY_SIZE] = {
+		0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+		0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
+	};
 	struct ls_frame frame = {
 		.payload_len = 0,
 	};
@@ -58,12 +62,24 @@ ZTEST(lora_star_mac, test_ls_mac_send)
 	uint32_t sent_data_len;
 	int ret;
 
-	ret = ls_mac_send(&ctx, &frame, NULL);
+	ret = ls_mac_send(&ctx, &frame, key);
 	sent_data = lora_fake_get_sent_data(&sent_data_len);
 
 	zassert_equal(ret, 0);
 	zassert_equal(sent_data_len, LS_FRAME_SIZE(frame.payload_len));
 	zassert_mem_equal(sent_data, frame.buf, sent_data_len);
+}
+
+ZTEST(lora_star_mac, test_ls_mac_send_null_key)
+{
+	struct ls_frame frame = {
+		.payload_len = 0,
+	};
+	int ret;
+
+	ret = ls_mac_send(&ctx, &frame, NULL);
+
+	zassert_equal(ret, -EINVAL);
 }
 
 ZTEST(lora_star_mac, test_ls_mac_send_null_ctx)

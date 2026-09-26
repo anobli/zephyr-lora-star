@@ -368,4 +368,78 @@ ZTEST(lora_star_crypto, test_e2e_tampered_payload_fails_verify)
 			  "corrupted frame must fail signature check");
 }
 
+/* --------------------------------------------------------------------------
+ * ls_crypto_hkdf — HKDF-SHA256 key derivation
+ * -------------------------------------------------------------------------- */
+
+ZTEST(lora_star_crypto, test_hkdf_deterministic)
+{
+	static const uint8_t ikm[]  = "shared-secret-material";
+	static const uint8_t salt[] = "salt-value";
+	static const uint8_t info[] = "domain-separator";
+	uint8_t key_a[LS_NETWORK_KEY_SIZE];
+	uint8_t key_b[LS_NETWORK_KEY_SIZE];
+
+	zassert_equal(ls_crypto_hkdf(ikm, sizeof(ikm) - 1, salt, sizeof(salt) - 1,
+				     info, sizeof(info) - 1, key_a), 0);
+	zassert_equal(ls_crypto_hkdf(ikm, sizeof(ikm) - 1, salt, sizeof(salt) - 1,
+				     info, sizeof(info) - 1, key_b), 0);
+
+	zassert_mem_equal(key_a, key_b, LS_NETWORK_KEY_SIZE,
+			   "identical inputs must derive identical keys");
+}
+
+ZTEST(lora_star_crypto, test_hkdf_salt_changes_output)
+{
+	static const uint8_t ikm[]    = "shared-secret-material";
+	static const uint8_t salt_a[] = "salt-one";
+	static const uint8_t salt_b[] = "salt-two";
+	static const uint8_t info[]   = "domain-separator";
+	uint8_t key_a[LS_NETWORK_KEY_SIZE];
+	uint8_t key_b[LS_NETWORK_KEY_SIZE];
+
+	zassert_equal(ls_crypto_hkdf(ikm, sizeof(ikm) - 1, salt_a, sizeof(salt_a) - 1,
+				     info, sizeof(info) - 1, key_a), 0);
+	zassert_equal(ls_crypto_hkdf(ikm, sizeof(ikm) - 1, salt_b, sizeof(salt_b) - 1,
+				     info, sizeof(info) - 1, key_b), 0);
+
+	zassert_true(memcmp(key_a, key_b, LS_NETWORK_KEY_SIZE) != 0,
+		     "different salts must derive different keys");
+}
+
+ZTEST(lora_star_crypto, test_hkdf_info_changes_output)
+{
+	static const uint8_t ikm[]    = "shared-secret-material";
+	static const uint8_t salt[]   = "salt-value";
+	static const uint8_t info_a[] = "context-one";
+	static const uint8_t info_b[] = "context-two";
+	uint8_t key_a[LS_NETWORK_KEY_SIZE];
+	uint8_t key_b[LS_NETWORK_KEY_SIZE];
+
+	zassert_equal(ls_crypto_hkdf(ikm, sizeof(ikm) - 1, salt, sizeof(salt) - 1,
+				     info_a, sizeof(info_a) - 1, key_a), 0);
+	zassert_equal(ls_crypto_hkdf(ikm, sizeof(ikm) - 1, salt, sizeof(salt) - 1,
+				     info_b, sizeof(info_b) - 1, key_b), 0);
+
+	zassert_true(memcmp(key_a, key_b, LS_NETWORK_KEY_SIZE) != 0,
+		     "different info strings must derive different keys");
+}
+
+ZTEST(lora_star_crypto, test_hkdf_ikm_changes_output)
+{
+	static const uint8_t salt[]  = "salt-value";
+	static const uint8_t info[]  = "domain-separator";
+	uint8_t key_a[LS_NETWORK_KEY_SIZE];
+	uint8_t key_b[LS_NETWORK_KEY_SIZE];
+
+	zassert_equal(ls_crypto_hkdf(test_key, sizeof(test_key), salt, sizeof(salt) - 1,
+				     info, sizeof(info) - 1, key_a), 0);
+	zassert_equal(ls_crypto_hkdf(alt_key, sizeof(alt_key), salt, sizeof(salt) - 1,
+				     info, sizeof(info) - 1, key_b), 0);
+
+	zassert_true(memcmp(key_a, key_b, LS_NETWORK_KEY_SIZE) != 0,
+		     "different IKM must derive different keys — this is what makes a fresh "
+		     "rejoin session key unpredictable without the network key");
+}
+
 ZTEST_SUITE(lora_star_crypto, NULL, NULL, NULL, NULL, NULL);

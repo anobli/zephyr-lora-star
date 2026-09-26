@@ -460,6 +460,18 @@ static void send_before(void *fixture)
 	g_ctx->fcnt = 0;
 	g_ctx->always_on_rx = false;
 
+	/*
+	 * DATA/ACK traffic is keyed off the session, not the network key —
+	 * fake an already-established session so these tests don't need to
+	 * run the rejoin handshake first. Reusing test_network_key's bytes as
+	 * the session key too means test_send_data_ack_success's frame, built
+	 * and signed with g_ctx->network_key, verifies correctly against
+	 * whatever ls_resolve_rx_key() resolves to on receive.
+	 */
+	g_ctx->_session_active  = true;
+	g_ctx->_session_rx_fcnt = 0;
+	memcpy(g_ctx->_session_key, test_network_key, LS_NETWORK_KEY_SIZE);
+
 	/* clear any registered handlers */
 	k_mutex_lock(&g_ctx->_handlers_lock, K_FOREVER);
 	memset(g_ctx->_handlers, 0, sizeof(g_ctx->_handlers));
