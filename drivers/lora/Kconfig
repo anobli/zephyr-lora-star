@@ -1,0 +1,7 @@
+config LORA_FAKE
+	bool "Fake LoRa driver for testing"
+	depends on LORA
+	help
+	  Enable a fff-backed fake LoRa driver for use in unit tests.
+	  Requires a DT node with compatible = "zephyr,lora-fake" and
+	  status = "okay" in the board overlay.
