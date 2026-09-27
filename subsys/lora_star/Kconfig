@@ -72,6 +72,14 @@ config LORA_STAR_NODE
 	help
 	  Include the node state machine.  Enabled via LORA_STAR_ROLE.
 
+config LORA_STAR_PAIRING
+	bool "Enable pairing support"
+	depends on (LORA_STAR_COORDINATOR || LORA_STAR_NODE)
+	help
+	  Include logic for pairing a node with a coordinator
+	  securely by using asymetric encryption for exchanging
+	  the network key.
+
 config LORA_STAR_NODE_ALWAYS_RX
 	bool "Keep node radio in continuous RX when idle"
 	depends on LORA_STAR_NODE
@@ -84,15 +92,6 @@ config LORA_STAR_NODE_ALWAYS_RX
 	  The radio draws RX current (~10 mA for SX1262) continuously instead
 	  of sleeping between keepalives. Use ls_coord_send_direct() on the
 	  coordinator side to take advantage of this mode.
-
-config LORA_STAR_MAX_NODES
-	int "Maximum number of paired nodes (coordinator)"
-	default 16
-	depends on LORA_STAR_COORDINATOR
-	help
-	  Include logic for pairing a node with a coordinator
-	  securely by using asymetric encryption for exchanging
-	  the network key.
 
 if LORA_STAR_PAIRING
 

@@ -272,6 +272,23 @@ void ls_set_network_key(struct ls_ctx *ctx, const uint8_t key[LS_NETWORK_KEY_SIZ
  * @param ctx   LoRa Star context.
  * @param addr  Short address to assign (use @ref LS_COORD_ADDR for coordinator).
  */
+void ls_set_own_addr(struct ls_ctx *ctx, uint16_t addr);
+
+#ifdef CONFIG_LORA_STAR_COORDINATOR
+
+/**
+ * @brief Queue a downlink payload for a paired node.
+ *
+ * The payload is buffered and delivered on the next uplink ACK
+ * (ACK_PENDING flag).  Only one pending downlink per node is kept;
+ * a second call overwrites the first.
+ *
+ * @param ctx         Coordinator context.
+ * @param short_addr  Destination node short address (0x0001–0xFFFE).
+ * @param data        Payload buffer (max 114 bytes).
+ * @param len         Payload length in bytes.
+ * @return 0 on success, -ENOENT if address unknown, -EINVAL if len > 114.
+ */
 int ls_coord_send(struct ls_coord_ctx *ctx, uint16_t short_addr,
 		  const uint8_t *data, uint8_t len);
 
@@ -299,11 +316,36 @@ int ls_coord_send(struct ls_coord_ctx *ctx, uint16_t short_addr,
 int ls_coord_send_direct(struct ls_coord_ctx *ctx, uint16_t short_addr,
 			  const uint8_t *data, uint8_t len);
 
+/**
+ * @brief Callback invoked on each received uplink.
+ *
+ * Called from the protocol thread; must not block for long.
+ *
+ * @param ctx        Coordinator context.
+ * @param short_addr Source node address.
+ * @param data       Decrypted application payload.
+ * @param len        Payload length.
+ */
+typedef void (*ls_coord_recv_cb)(struct ls_coord_ctx *ctx, uint16_t short_addr,
+				 const uint8_t *data, uint8_t len);
+
+/**
+ * @brief Callback invoked when a new node completes pairing.
+ *
+ * @param ctx        Coordinator context.
+ * @param short_addr Assigned short address.
+ * @param dev_eui    Node DevEUI (8 bytes).
+ */
+typedef void (*ls_coord_join_cb)(struct ls_coord_ctx *ctx, uint16_t short_addr,
+				 const uint8_t *dev_eui);
+
 /** @brief Register the uplink receive callback. */
 void ls_coord_set_recv_cb(struct ls_coord_ctx *ctx, ls_coord_recv_cb cb);
 
 /** @brief Register the join (new node paired) callback. */
 void ls_coord_set_join_cb(struct ls_coord_ctx *ctx, ls_coord_join_cb cb);
+
+#endif /* CONFIG_LORA_STAR_COORDINATOR */
 
 /* --------------------------------------------------------------------------
  * Node API
