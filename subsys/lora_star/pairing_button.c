@@ -3,9 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifdef CONFIG_LORA_STAR_PAIRING_BUTTON
-
-#define DT_DRV_COMPAT lora_star_pairing_button
+#define DT_DRV_COMPAT zephyr_ls_pairing_button
 
 #include <zephyr/kernel.h>
 #include <zephyr/init.h>
@@ -20,15 +18,19 @@
 
 LOG_MODULE_REGISTER(ls_pairing_button, CONFIG_LORA_STAR_LOG_LEVEL);
 
-BUILD_ASSERT(DT_HAS_COMPAT_STATUS_OKAY(DT_DRV_COMPAT),
-	    "CONFIG_LORA_STAR_PAIRING_BUTTON requires a devicetree node with "
-	    "compatible = \"lora_star,pairing-button\" and status = \"okay\"");
 BUILD_ASSERT(DT_NUM_INST_STATUS_OKAY(DT_DRV_COMPAT) <= 1,
 	    "Only one lora_star,pairing-button node is supported");
 
-static const struct gpio_dt_spec btn = GPIO_DT_SPEC_INST_GET(0, gpios);
-static struct gpio_callback      btn_cb;
-static struct k_work             pairing_work;
+
+
+struct ls_pairing_button_config {
+	const struct gpio_dt_spec btn;
+};
+
+struct ls_pairing_button_data {
+	struct gpio_callback btn_cb;
+	struct k_work pairing_work;
+};
 
 /* --------------------------------------------------------------------------
  * Coordinator path
@@ -159,42 +161,54 @@ static void pairing_work_handler(struct k_work *work)
 
 static void btn_isr(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
 {
-	ARG_UNUSED(dev);
-	ARG_UNUSED(cb);
-	ARG_UNUSED(pins);
-	k_work_submit(&pairing_work);
+	struct ls_pairing_button_data *data;
+
+	data = CONTAINER_OF(cb, struct ls_pairing_button_data, btn_cb);
+
+	k_work_submit(&data->pairing_work);
 }
 
-static int ls_pairing_button_init(void)
+static int ls_pairing_button_init(const struct device *dev)
 {
+	const struct ls_pairing_button_config *cfg = dev->config;
+	struct ls_pairing_button_data *data = dev->data;
 	int ret;
 
-	if (!gpio_is_ready_dt(&btn)) {
+	if (!gpio_is_ready_dt(&cfg->btn)) {
 		LOG_ERR("Pairing button GPIO not ready");
 		return -ENODEV;
 	}
 
-	k_work_init(&pairing_work, pairing_work_handler);
+	k_work_init(&data->pairing_work, pairing_work_handler);
 
-	ret = gpio_pin_configure_dt(&btn, GPIO_INPUT);
+	ret = gpio_pin_configure_dt(&cfg->btn, GPIO_INPUT);
 	if (ret < 0) {
 		LOG_ERR("Failed to configure pairing button: %d", ret);
 		return ret;
 	}
 
-	ret = gpio_pin_interrupt_configure_dt(&btn, GPIO_INT_EDGE_TO_ACTIVE);
+	ret = gpio_pin_interrupt_configure_dt(&cfg->btn, GPIO_INT_EDGE_TO_ACTIVE);
 	if (ret < 0) {
 		LOG_ERR("Failed to configure pairing button interrupt: %d", ret);
 		return ret;
 	}
 
-	gpio_init_callback(&btn_cb, btn_isr, BIT(btn.pin));
-	gpio_add_callback(btn.port, &btn_cb);
+	gpio_init_callback(&data->btn_cb, btn_isr, BIT(cfg->btn.pin));
+	gpio_add_callback(cfg->btn.port, &data->btn_cb);
 
 	LOG_INF("Pairing button ready");
 	return 0;
 }
 
-SYS_INIT(ls_pairing_button_init, POST_KERNEL, CONFIG_APPLICATION_INIT_PRIORITY);
+#define LS_PAIRING_BUTTON_DEVICE_INIT(inst)                                             \
+	static struct ls_pairing_button_data ls_pairing_button_data##inst;              \
+	static const struct ls_pairing_button_config ls_pairing_button_config##inst = { \
+		.btn = GPIO_DT_SPEC_INST_GET(inst, gpios),                              \
+	};                                                                              \
+	DEVICE_DT_INST_DEFINE(inst, ls_pairing_button_init, NULL,                       \
+			      &ls_pairing_button_data##inst,                            \
+			      &ls_pairing_button_config##inst,                          \
+			      POST_KERNEL, CONFIG_LORA_INIT_PRIORITY,                   \
+			      NULL);
 
-#endif /* CONFIG_LORA_STAR_PAIRING_BUTTON */
+DT_INST_FOREACH_STATUS_OKAY(LS_PAIRING_BUTTON_DEVICE_INIT)

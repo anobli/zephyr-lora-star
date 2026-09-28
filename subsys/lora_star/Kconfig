@@ -115,7 +115,7 @@ config LORA_STAR_PAIRING_CRYPTO_GUARD_MS
 
 config LORA_STAR_PAIRING_BUTTON
 	bool "GPIO-triggered pairing button"
-	depends on GPIO
+	depends on GPIO && DT_HAS_ZEPHYR_LS_PAIRING_BUTTON_ENABLED
 	help
 	  Start pairing from a devicetree-configured GPIO button, with no
 	  application code required: the coordinator opens a pairing window

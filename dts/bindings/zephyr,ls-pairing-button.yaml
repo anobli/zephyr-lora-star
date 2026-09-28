@@ -1,0 +1,9 @@
+compatible: "zephyr,ls-pairing-button"
+description: |
+  Enable and configure the button for enabling pairing process
+  for LoRa Star device or coordinator.
+
+properties:
+  gpios:
+    type: phandle-array
+    required: true
