@@ -1,0 +1,6 @@
+/ {
+	fake_lora: lora {
+		compatible = "zephyr,fake-lora";
+		status = "okay";
+	};
+};
