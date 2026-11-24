@@ -1,11 +1,11 @@
 / {
-	lora_fake: lora-fake {
-		compatible = "zephyr,lora-fake";
+	fake_lora: lora {
+		compatible = "zephyr,fake-lora";
 		status = "okay";
 	};
 
 	pairing_button: pairing-button {
-		compatible = "lora_star,pairing-button";
+		compatible = "zephyr,ls-pairing-button";
 		gpios = <&gpio0 5 GPIO_ACTIVE_HIGH>;
 	};
 };

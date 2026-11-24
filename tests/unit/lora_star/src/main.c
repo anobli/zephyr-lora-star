@@ -9,7 +9,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/ztest.h>
 #include <zephyr/drivers/lora.h>
-#include <zephyr/drivers/lora_fake.h>
+#include "ls_fake_radio.h"
 
 #include <lora_star/lora_star.h>
 #include <lora_star/mac.h>
@@ -106,7 +106,7 @@ static void push_frame(struct ls_ctx *ctx, uint8_t type, uint16_t src, uint16_t 
 static void *suite_setup(void)
 {
 	if (!g_ctx) {
-		g_ctx = ls_init(lora_fake_get_device());
+		g_ctx = ls_init(ls_fake_radio_dev());
 		zassert_not_null(g_ctx, "ls_init failed");
 	}
 	return NULL;
@@ -454,7 +454,7 @@ ZTEST_SUITE(lora_star_callbacks, NULL, suite_setup, callbacks_before, NULL, NULL
 static void send_before(void *fixture)
 {
 	ARG_UNUSED(fixture);
-	lora_fake_reset();
+	ls_fake_radio_reset();
 	ls_set_own_addr(g_ctx, 0x0001);
 	ls_set_network_key(g_ctx, test_network_key);
 	g_ctx->fcnt = 0;
@@ -493,7 +493,7 @@ ZTEST(lora_star_send, test_send_ack_frame_type_and_size)
 	uint32_t sent_len;
 
 	ls_send_ack(g_ctx, LS_COORD_ADDR);
-	sent = lora_fake_get_sent_data(&sent_len);
+	sent = ls_fake_radio_get_tx(&sent_len);
 
 	zassert_equal(sent_len, LS_FRAME_SIZE(0),
 		      "ACK frame size must be LS_FRAME_SIZE(0), got %u", sent_len);
@@ -518,7 +518,7 @@ ZTEST(lora_star_send, test_send_data_frame_type_and_size)
 	uint32_t sent_len;
 
 	ls_send_data(g_ctx, LS_COORD_ADDR, payload, sizeof(payload));
-	sent = lora_fake_get_sent_data(&sent_len);
+	sent = ls_fake_radio_get_tx(&sent_len);
 
 	zassert_equal(sent_len, LS_FRAME_SIZE(sizeof(payload)),
 		      "DATA frame size mismatch: got %u, expected %zu",
@@ -582,8 +582,8 @@ ZTEST(lora_star_send, test_send_data_ack_success)
 	ret = ls_frame_sign(&ack_frame, g_ctx->network_key);
 	zassert_equal(ret, 0, "ls_frame_sign failed: %d", ret);
 
-	/* Stage the ACK in lora_fake — delivered when lora_fake_trigger_recv_async is called. */
-	lora_fake_set_recv_data(ack_frame.buf, LS_FRAME_SIZE(0), -50, 5);
+	/* Stage the ACK in the fake radio — delivered when ls_fake_radio_trigger_rx() is called. */
+	ls_fake_radio_set_rx(ack_frame.buf, LS_FRAME_SIZE(0), -50, 5);
 
 	args.ctx = g_ctx;
 	args.dst = LS_COORD_ADDR;
@@ -598,7 +598,7 @@ ZTEST(lora_star_send, test_send_data_ack_success)
 	 */
 	k_msleep(50);
 
-	lora_fake_trigger_recv_async();
+	ls_fake_radio_trigger_rx();
 
 	ret = k_thread_join(&ack_thread, K_SECONDS(5));
 	zassert_equal(ret, 0, "helper thread did not finish: %d", ret);

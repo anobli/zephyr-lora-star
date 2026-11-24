@@ -12,7 +12,7 @@
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/gpio/gpio_emul.h>
 #include <zephyr/drivers/lora.h>
-#include <zephyr/drivers/lora_fake.h>
+#include "ls_fake_radio.h"
 
 #include <lora_star/lora_star.h>
 #include <lora_star/mac.h>
@@ -129,8 +129,8 @@ static void inject_valid_join_req(void)
 	build_join_req(jr_buf, sizeof(jr_buf), test_dev_eui, node_pub, nonce);
 
 	/* rssi = -40 dBm, above the -60 dBm default threshold */
-	lora_fake_set_recv_data(jr_buf, sizeof(jr_buf), -40, 5);
-	lora_fake_trigger_recv_async();
+	ls_fake_radio_set_rx(jr_buf, sizeof(jr_buf), -40, 5);
+	ls_fake_radio_trigger_rx();
 }
 
 /*
@@ -149,7 +149,7 @@ static struct ls_ctx *g_ctx;
 
 static void *pairing_button_suite_setup(void)
 {
-	g_ctx = ls_init(lora_fake_get_device());
+	g_ctx = ls_init(ls_fake_radio_dev());
 	zassert_not_null(g_ctx, "ls_init failed");
 	zassert_ok(ls_init_coord(g_ctx));
 
@@ -160,7 +160,7 @@ static void pairing_button_before(void *fixture)
 {
 	ARG_UNUSED(fixture);
 
-	lora_fake_reset();
+	ls_fake_radio_reset();
 	ls_mac_recv(g_ctx);
 }
 
@@ -175,7 +175,7 @@ ZTEST(lora_star_pairing_button, test_press_opens_pairing_window)
 	/* JOIN_ACCEPT involves an ECDH agreement + HKDF; give it real time to run. */
 	k_msleep(500);
 
-	sent = lora_fake_get_sent_data(&sent_len);
+	sent = ls_fake_radio_get_tx(&sent_len);
 	zassert_not_null(sent, "button press should have opened a pairing window "
 				"that accepted the JOIN_REQ");
 	zassert_equal(sent[0], LS_TYPE_JOIN_ACCEPT,
@@ -189,7 +189,7 @@ ZTEST(lora_star_pairing_button, test_no_press_no_pairing_window)
 	inject_valid_join_req();
 	k_msleep(200);
 
-	zassert_is_null(lora_fake_get_sent_data(&sent_len),
+	zassert_is_null(ls_fake_radio_get_tx(&sent_len),
 			"a JOIN_REQ must be ignored while the pairing button hasn't been pressed");
 }
 

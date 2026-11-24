@@ -6,7 +6,7 @@
 #include <zephyr/ztest.h>
 #include <string.h>
 #include <zephyr/drivers/lora.h>
-#include <zephyr/drivers/lora_fake.h>
+#include "ls_fake_radio.h"
 #include <lora_star/mac.h>
 
 #include "event.h"
@@ -22,9 +22,9 @@ static struct k_msgq test_msgq;
 static void mac_before(void *fixture)
 {
 	ARG_UNUSED(fixture);
-	lora_fake_reset();
+	ls_fake_radio_reset();
 	memset(&ctx, 0, sizeof(ctx));
-	ctx.radio_dev = lora_fake_get_device();
+	ctx.radio_dev = ls_fake_radio_dev();
 	k_msgq_init(&test_msgq, (char *)test_msgq_buf, sizeof(struct ls_event),
 		     CONFIG_LORA_STAR_MSGQ_DEPTH);
 	ctx._msgq = &test_msgq;
@@ -42,7 +42,7 @@ ZTEST(lora_star_mac, test_ls_mac_init)
 	ret = ls_mac_init(&ctx);
 
 	zassert_equal(ret, 0);
-	zassert_equal(lora_fake_config_fake.call_count, 1);
+	zassert_equal(fake_lora_config_fake.call_count, 1);
 }
 
 /* --------------------------------------------------------------------------
@@ -63,7 +63,7 @@ ZTEST(lora_star_mac, test_ls_mac_send)
 	int ret;
 
 	ret = ls_mac_send(&ctx, &frame, key);
-	sent_data = lora_fake_get_sent_data(&sent_data_len);
+	sent_data = ls_fake_radio_get_tx(&sent_data_len);
 
 	zassert_equal(ret, 0);
 	zassert_equal(sent_data_len, LS_FRAME_SIZE(frame.payload_len));
@@ -140,8 +140,8 @@ ZTEST(lora_star_mac, test_ls_mac_recv)
 
 	ret = ls_mac_recv(&ctx);
 	zassert_equal(ret, 0);
-	lora_fake_set_recv_data(test_buf, sizeof(test_buf), -70, 5);
-	lora_fake_trigger_recv_async();
+	ls_fake_radio_set_rx(test_buf, sizeof(test_buf), -70, 5);
+	ls_fake_radio_trigger_rx();
 	ret = k_msgq_get(ctx._msgq, &ev, K_NO_WAIT);
 
 	zassert_equal(ret, 0);
@@ -177,8 +177,8 @@ ZTEST(lora_star_mac, test_ls_mac_rx_stop)
 	ls_mac_recv(&ctx);
 	ls_mac_rx_stop(&ctx);
 	k_msgq_purge(ctx._msgq);
-	lora_fake_set_recv_data(test_buf, sizeof(test_buf), -70, 5);
-	lora_fake_trigger_recv_async();
+	ls_fake_radio_set_rx(test_buf, sizeof(test_buf), -70, 5);
+	ls_fake_radio_trigger_rx();
 	ret = k_msgq_get(ctx._msgq, &ev, K_NO_WAIT);
 
 	zassert_equal(ret, -ENOMSG);
@@ -192,11 +192,11 @@ ZTEST(lora_star_mac, test_ls_mac_airtime_ms)
 {
 	uint32_t airtime;
 
-	lora_fake_airtime_fake.return_val = 100;
+	fake_lora_airtime_fake.return_val = 100;
 	airtime = ls_mac_airtime_ms(&ctx, 64);
 
 	zassert_equal(airtime, 100);
-	zassert_equal(lora_fake_airtime_fake.arg1_val, 64);
+	zassert_equal(fake_lora_airtime_fake.arg1_val, 64);
 }
 
 ZTEST_SUITE(lora_star_mac, NULL, NULL, mac_before, NULL, NULL);

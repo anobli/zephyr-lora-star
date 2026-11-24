@@ -5,13 +5,13 @@
 
 #include <zephyr/ztest.h>
 #include <zephyr/drivers/lora.h>
-#include <zephyr/drivers/lora_fake.h>
+#include "ls_fake_radio.h"
 #include <lora_star/radio.h>
 
 static void radio_before(void *fixture)
 {
 	ARG_UNUSED(fixture);
-	lora_fake_reset();
+	ls_fake_radio_reset();
 }
 
 /* --------------------------------------------------------------------------
@@ -23,12 +23,12 @@ ZTEST(lora_star_radio, test_ls_radio_init)
 	const struct device *dev;
 	int ret;
 
-	dev = lora_fake_get_device();
+	dev = ls_fake_radio_dev();
 	ret = ls_radio_init(dev);
 
 	zassert_equal(ret, 0);
-	zassert_equal(lora_fake_config_fake.call_count, 1);
-	zassert_true(lora_fake_config_fake.arg1_val->tx);
+	zassert_equal(fake_lora_config_fake.call_count, 1);
+	zassert_true(fake_lora_config_fake.arg1_val->tx);
 }
 
 ZTEST(lora_star_radio, test_ls_radio_init_propagates_error)
@@ -36,8 +36,8 @@ ZTEST(lora_star_radio, test_ls_radio_init_propagates_error)
 	const struct device *dev;
 	int ret;
 
-	dev = lora_fake_get_device();
-	lora_fake_config_fake.return_val = -EIO;
+	dev = ls_fake_radio_dev();
+	fake_lora_config_fake.return_val = -EIO;
 	ret = ls_radio_init(dev);
 
 	zassert_equal(ret, -EIO);
@@ -55,9 +55,9 @@ ZTEST(lora_star_radio, test_ls_radio_tx)
 	uint32_t sent_data_len;
 	int ret;
 
-	dev = lora_fake_get_device();
+	dev = ls_fake_radio_dev();
 	ret = ls_radio_tx(dev, data, sizeof(data));
-	sent_data = lora_fake_get_sent_data(&sent_data_len);
+	sent_data = ls_fake_radio_get_tx(&sent_data_len);
 
 	zassert_equal(ret, 0);
 	zassert_equal(sent_data_len, sizeof(data));
@@ -69,10 +69,10 @@ ZTEST(lora_star_radio, test_ls_radio_tx_configures_tx_mode)
 	const struct device *dev;
 	uint8_t data[] = {0x01};
 
-	dev = lora_fake_get_device();
+	dev = ls_fake_radio_dev();
 	ls_radio_tx(dev, data, sizeof(data));
 
-	zassert_true(lora_fake_config_fake.arg1_val->tx);
+	zassert_true(fake_lora_config_fake.arg1_val->tx);
 }
 
 ZTEST(lora_star_radio, test_ls_radio_tx_propagates_config_error)
@@ -81,8 +81,8 @@ ZTEST(lora_star_radio, test_ls_radio_tx_propagates_config_error)
 	uint8_t data[] = {0x01};
 	int ret;
 
-	dev = lora_fake_get_device();
-	lora_fake_config_fake.return_val = -EIO;
+	dev = ls_fake_radio_dev();
+	fake_lora_config_fake.return_val = -EIO;
 	ret = ls_radio_tx(dev, data, sizeof(data));
 
 	zassert_equal(ret, -EIO);
@@ -94,9 +94,9 @@ ZTEST(lora_star_radio, test_ls_radio_tx_propagates_send_error)
 	uint8_t data[] = {0x01};
 	int ret;
 
-	dev = lora_fake_get_device();
-	lora_fake_send_fake.custom_fake = NULL;
-	lora_fake_send_fake.return_val = -EIO;
+	dev = ls_fake_radio_dev();
+	fake_lora_send_fake.custom_fake = NULL;
+	fake_lora_send_fake.return_val = -EIO;
 	ret = ls_radio_tx(dev, data, sizeof(data));
 
 	zassert_equal(ret, -EIO);
@@ -124,7 +124,7 @@ ZTEST(lora_star_radio, test_ls_radio_rx_null_callback)
 	const struct device *dev;
 	int ret;
 
-	dev = lora_fake_get_device();
+	dev = ls_fake_radio_dev();
 	ret = ls_radio_rx_start(dev, NULL, NULL);
 
 	zassert_equal(ret, -EINVAL);
@@ -136,12 +136,12 @@ ZTEST(lora_star_radio, test_ls_radio_rx_start)
 	int count = 0;
 	int ret;
 
-	dev = lora_fake_get_device();
+	dev = ls_fake_radio_dev();
 	ret = ls_radio_rx_start(dev, rx_cb, &count);
 
 	zassert_equal(ret, 0);
-	zassert_equal(lora_fake_recv_async_fake.call_count, 1);
-	zassert_false(lora_fake_config_fake.arg1_val->tx);
+	zassert_equal(fake_lora_recv_async_fake.call_count, 1);
+	zassert_false(fake_lora_config_fake.arg1_val->tx);
 }
 
 ZTEST(lora_star_radio, test_ls_radio_rx_start_propagates_config_error)
@@ -150,8 +150,8 @@ ZTEST(lora_star_radio, test_ls_radio_rx_start_propagates_config_error)
 	int count = 0;
 	int ret;
 
-	dev = lora_fake_get_device();
-	lora_fake_config_fake.return_val = -EIO;
+	dev = ls_fake_radio_dev();
+	fake_lora_config_fake.return_val = -EIO;
 	ret = ls_radio_rx_start(dev, rx_cb, &count);
 
 	zassert_equal(ret, -EIO);
@@ -163,10 +163,10 @@ ZTEST(lora_star_radio, test_ls_radio_rx_callback_invoked)
 	uint8_t data[] = {0x33, 0x45, 0x56, 0x32};
 	int count = 0;
 
-	dev = lora_fake_get_device();
+	dev = ls_fake_radio_dev();
 	ls_radio_rx_start(dev, rx_cb, &count);
-	lora_fake_set_recv_data(data, sizeof(data), -70, 5);
-	lora_fake_trigger_recv_async();
+	ls_fake_radio_set_rx(data, sizeof(data), -70, 5);
+	ls_fake_radio_trigger_rx();
 
 	zassert_equal(count, 1);
 }
@@ -177,11 +177,11 @@ ZTEST(lora_star_radio, test_ls_radio_rx_stop)
 	uint8_t data[] = {0x33, 0x45, 0x56, 0x32};
 	int count = 0;
 
-	dev = lora_fake_get_device();
+	dev = ls_fake_radio_dev();
 	ls_radio_rx_start(dev, rx_cb, &count);
 	ls_radio_rx_stop(dev);
-	lora_fake_set_recv_data(data, sizeof(data), -70, 5);
-	lora_fake_trigger_recv_async();
+	ls_fake_radio_set_rx(data, sizeof(data), -70, 5);
+	ls_fake_radio_trigger_rx();
 
 	zassert_equal(count, 0);
 }
@@ -195,12 +195,12 @@ ZTEST(lora_star_radio, test_ls_radio_airtime_ms)
 	const struct device *dev;
 	uint32_t airtime;
 
-	dev = lora_fake_get_device();
-	lora_fake_airtime_fake.return_val = 42;
+	dev = ls_fake_radio_dev();
+	fake_lora_airtime_fake.return_val = 42;
 	airtime = ls_radio_airtime_ms(dev, 128);
 
 	zassert_equal(airtime, 42);
-	zassert_equal(lora_fake_airtime_fake.arg1_val, 128);
+	zassert_equal(fake_lora_airtime_fake.arg1_val, 128);
 }
 
 ZTEST_SUITE(lora_star_radio, NULL, NULL, radio_before, NULL, NULL);

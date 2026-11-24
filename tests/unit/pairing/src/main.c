@@ -10,7 +10,7 @@
 
 #include <zephyr/ztest.h>
 #include <zephyr/drivers/lora.h>
-#include <zephyr/drivers/lora_fake.h>
+#include "ls_fake_radio.h"
 
 #include <lora_star/lora_star.h>
 #include <lora_star/mac.h>
@@ -195,7 +195,7 @@ static void *pairing_suite_setup(void)
 {
 	int ret;
 
-	g_ctx = ls_init(lora_fake_get_device());
+	g_ctx = ls_init(ls_fake_radio_dev());
 	zassert_not_null(g_ctx, "ls_init failed");
 	ret = ls_init_coord(g_ctx);
 	zassert_equal(ret, 0, "ls_init_coord failed: %d", ret);
@@ -215,7 +215,7 @@ static void coord_before(void *fixture)
 	k_sem_init(&g_join_sem, 0, 1);
 	g_joined_addr = 0;
 
-	lora_fake_reset();
+	ls_fake_radio_reset();
 	ls_mac_recv(g_ctx);
 
 	ret = ls_pairing_coord_start(&g_pair_ctx);
@@ -270,8 +270,8 @@ ZTEST(lora_star_pairing_coord, test_coord_join_rssi_rejected)
 	build_join_req(jr_buf, sizeof(jr_buf), test_dev_eui, node_pub, nonce);
 
 	/* rssi = -80 dBm, below the -60 dBm default threshold */
-	lora_fake_set_recv_data(jr_buf, sizeof(jr_buf), -80, 5);
-	lora_fake_trigger_recv_async();
+	ls_fake_radio_set_rx(jr_buf, sizeof(jr_buf), -80, 5);
+	ls_fake_radio_trigger_rx();
 
 	ret = k_sem_take(&g_join_sem, K_MSEC(200));
 	zassert_equal(ret, -EAGAIN,
@@ -293,8 +293,8 @@ ZTEST(lora_star_pairing_coord, test_coord_join_bad_mic)
 	/* Flip the last byte of the MIC to invalidate the integrity check */
 	jr_buf[sizeof(jr_buf) - 1] ^= 0xFF;
 
-	lora_fake_set_recv_data(jr_buf, sizeof(jr_buf), -40, 5);
-	lora_fake_trigger_recv_async();
+	ls_fake_radio_set_rx(jr_buf, sizeof(jr_buf), -40, 5);
+	ls_fake_radio_trigger_rx();
 
 	ret = k_sem_take(&g_join_sem, K_MSEC(200));
 	zassert_equal(ret, -EAGAIN,
@@ -314,8 +314,8 @@ ZTEST(lora_star_pairing_coord, test_coord_join_valid_req)
 	build_join_req(jr_buf, sizeof(jr_buf), test_dev_eui, node_pub, nonce);
 
 	/* rssi = -40 dBm, above the -60 dBm threshold */
-	lora_fake_set_recv_data(jr_buf, sizeof(jr_buf), -40, 5);
-	lora_fake_trigger_recv_async();
+	ls_fake_radio_set_rx(jr_buf, sizeof(jr_buf), -40, 5);
+	ls_fake_radio_trigger_rx();
 
 	ret = k_sem_take(&g_join_sem, K_MSEC(1000));
 	zassert_equal(ret, 0, "join callback did not fire within timeout");
@@ -352,8 +352,8 @@ ZTEST(lora_star_pairing_coord, test_coord_join_repair)
 	ret = test_ecdh_gen_keypair(node_pub, node_priv);
 	zassert_equal(ret, 0);
 	build_join_req(jr_buf, sizeof(jr_buf), test_dev_eui, node_pub, nonce);
-	lora_fake_set_recv_data(jr_buf, sizeof(jr_buf), -40, 5);
-	lora_fake_trigger_recv_async();
+	ls_fake_radio_set_rx(jr_buf, sizeof(jr_buf), -40, 5);
+	ls_fake_radio_trigger_rx();
 	ret = k_sem_take(&g_join_sem, K_MSEC(1000));
 	zassert_equal(ret, 0, "initial join did not complete");
 
@@ -370,8 +370,8 @@ ZTEST(lora_star_pairing_coord, test_coord_join_repair)
 	zassert_equal(ret, 0);
 	memset(jr_buf, 0, sizeof(jr_buf));
 	build_join_req(jr_buf, sizeof(jr_buf), test_dev_eui, node_pub, nonce2);
-	lora_fake_set_recv_data(jr_buf, sizeof(jr_buf), -40, 5);
-	lora_fake_trigger_recv_async();
+	ls_fake_radio_set_rx(jr_buf, sizeof(jr_buf), -40, 5);
+	ls_fake_radio_trigger_rx();
 
 	ret = k_sem_take(&g_join_sem, K_MSEC(1000));
 	zassert_equal(ret, 0, "re-pair join callback did not fire");
